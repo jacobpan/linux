@@ -184,4 +184,14 @@ menu "Texas Instruments thermal drivers"
 source "drivers/thermal/ti-soc-thermal/Kconfig"
 endmenu
 
+config INTEL_PCH_THERMAL
+	tristate "Intel PCH Thermal Reporing Device"
+	depends on THERMAL
+	depends on X86
+	depends on CPU_SUP_INTEL
+	help
+	  Enable this to support thermal reporting device on certain Intel
+	  SOCs. Thermal reporting device will provide temperature reading,
+	  programmable trip points, and other information.
+
 endif
