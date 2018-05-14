@@ -2336,6 +2336,104 @@ out_unlock:
 	return ret;
 }
 
+static int vfio_bind_gpasid_fn(struct device *dev, void *data)
+{
+	struct domain_capsule *dc = (struct domain_capsule *)data;
+	struct iommu_gpasid_bind_data *ustruct =
+		(struct iommu_gpasid_bind_data *) dc->data;
+
+	return iommu_sva_bind_gpasid(dc->domain, dev, ustruct);
+}
+
+static int vfio_unbind_gpasid_fn(struct device *dev, void *data)
+{
+	struct domain_capsule *dc = (struct domain_capsule *)data;
+	struct iommu_gpasid_bind_data *ustruct =
+		(struct iommu_gpasid_bind_data *) dc->data;
+
+	return iommu_sva_unbind_gpasid(dc->domain, dev,
+						ustruct->hpasid);
+}
+
+/*
+ * unbind specific gpasid, caller of this function requires hold
+ * vfio_iommu->lock
+ */
+static long vfio_iommu_type1_do_guest_unbind(struct vfio_iommu *iommu,
+		  struct iommu_gpasid_bind_data *gbind_data)
+{
+	return vfio_iommu_lookup_dev(iommu, vfio_unbind_gpasid_fn, gbind_data);
+}
+
+static long vfio_iommu_type1_bind_gpasid(struct vfio_iommu *iommu,
+					    void __user *arg,
+					    struct vfio_iommu_type1_bind *bind)
+{
+	struct iommu_gpasid_bind_data gbind_data;
+	unsigned long minsz;
+	int ret = 0;
+
+	minsz = sizeof(*bind) + sizeof(gbind_data);
+	if (bind->argsz < minsz)
+		return -EINVAL;
+
+	if (copy_from_user(&gbind_data, arg, sizeof(gbind_data)))
+		return -EFAULT;
+
+	mutex_lock(&iommu->lock);
+	if (!IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu)) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
+	ret = vfio_iommu_lookup_dev(iommu, vfio_bind_gpasid_fn, &gbind_data);
+	/*
+	 * If bind failed, it may not be a total failure. Some devices within
+	 * the iommu group may have bind successfully. Although we don't enable
+	 * pasid capability for non-singletion iommu groups, a unbind operation
+	 * would be helpful to ensure no partial binding for an iommu group.
+	 */
+	if (ret)
+		/*
+		 * Undo all binds that already succeeded, no need to check the
+		 * return value here since some device within the group has no
+		 * successful bind when coming to this place switch.
+		 */
+		vfio_iommu_type1_do_guest_unbind(iommu, &gbind_data);
+
+out_unlock:
+	mutex_unlock(&iommu->lock);
+	return ret;
+}
+
+static long vfio_iommu_type1_unbind_gpasid(struct vfio_iommu *iommu,
+					    void __user *arg,
+					    struct vfio_iommu_type1_bind *bind)
+{
+	struct iommu_gpasid_bind_data gbind_data;
+	unsigned long minsz;
+	int ret = 0;
+
+	minsz = sizeof(*bind) + sizeof(gbind_data);
+	if (bind->argsz < minsz)
+		return -EINVAL;
+
+	if (copy_from_user(&gbind_data, arg, sizeof(gbind_data)))
+		return -EFAULT;
+
+	mutex_lock(&iommu->lock);
+	if (!IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu)) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
+	ret = vfio_iommu_type1_do_guest_unbind(iommu, &gbind_data);
+
+out_unlock:
+	mutex_unlock(&iommu->lock);
+	return ret;
+}
+
 static long vfio_iommu_type1_ioctl(void *iommu_data,
 				   unsigned int cmd, unsigned long arg)
 {
@@ -2492,6 +2590,44 @@ static long vfio_iommu_type1_ioctl(void *iommu_data,
 				(void __user *)arg + minsz, sizeof(pasid)))
 				return -EFAULT;
 			return vfio_iommu_type1_pasid_free(iommu, pasid);
+		default:
+			return -EINVAL;
+		}
+
+	} else if (cmd == VFIO_IOMMU_BIND) {
+		struct vfio_iommu_type1_bind bind;
+
+		minsz = offsetofend(struct vfio_iommu_type1_bind, bind_type);
+
+		if (copy_from_user(&bind, (void __user *)arg, minsz))
+			return -EFAULT;
+
+		if (bind.argsz < minsz)
+			return -EINVAL;
+
+		switch (bind.bind_type) {
+		case VFIO_IOMMU_BIND_GUEST_PASID:
+			return vfio_iommu_type1_bind_gpasid(iommu,
+					(void __user *)(arg + minsz), &bind);
+		default:
+			return -EINVAL;
+		}
+
+	} else if (cmd == VFIO_IOMMU_UNBIND) {
+		struct vfio_iommu_type1_bind bind;
+
+		minsz = offsetofend(struct vfio_iommu_type1_bind, bind_type);
+
+		if (copy_from_user(&bind, (void __user *)arg, minsz))
+			return -EFAULT;
+
+		if (bind.argsz < minsz)
+			return -EINVAL;
+
+		switch (bind.bind_type) {
+		case VFIO_IOMMU_BIND_GUEST_PASID:
+			return vfio_iommu_type1_unbind_gpasid(iommu,
+					(void __user *)(arg + minsz), &bind);
 		default:
 			return -EINVAL;
 		}
