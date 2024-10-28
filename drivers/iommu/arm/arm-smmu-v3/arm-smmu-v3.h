@@ -898,7 +898,8 @@ extern struct xarray arm_smmu_asid_xa;
 extern struct mutex arm_smmu_asid_lock;
 
 struct arm_smmu_domain *arm_smmu_domain_alloc(void);
-
+struct arm_smmu_ste *
+arm_smmu_get_step_for_sid(struct arm_smmu_device *smmu, u32 sid);
 void arm_smmu_clear_cd(struct arm_smmu_master *master, ioasid_t ssid);
 struct arm_smmu_cd *arm_smmu_get_cd_ptr(struct arm_smmu_master *master,
 					u32 ssid);
@@ -1030,5 +1031,11 @@ struct iommufd_viommu *arm_vsmmu_alloc(struct device *dev,
 #define arm_smmu_hw_info NULL
 #define arm_vsmmu_alloc NULL
 #endif /* CONFIG_ARM_SMMU_V3_IOMMUFD */
-
+#ifdef CONFIG_ARM_SMMU_V3_DEBUGFS
+void arm_smmu_debugfs_init(void);
+void arm_smmu_debugfs_uninit(void);
+#else
+static inline void arm_smmu_debugfs_init(void) {}
+static inline void arm_smmu_debugfs_uninit(void) {}
+#endif /* CONFIG_ARM_SMMU_V3_DEBUGFS */
 #endif /* _ARM_SMMU_V3_H */
