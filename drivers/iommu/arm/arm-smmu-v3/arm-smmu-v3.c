@@ -4339,6 +4339,8 @@ static int arm_smmu_device_hw_probe(struct arm_smmu_device *smmu)
 
 	dev_info(smmu->dev, "ias %lu-bit, oas %lu-bit (features 0x%08x)\n",
 		 smmu->ias, smmu->oas, smmu->features);
+	dev_info(smmu->dev, "SMMU va base %llx", (u64)smmu->base);
+
 	return 0;
 }
 
@@ -4573,6 +4575,7 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	smmu->base = arm_smmu_ioremap(dev, ioaddr, ARM_SMMU_REG_SZ);
 	if (IS_ERR(smmu->base))
 		return PTR_ERR(smmu->base);
+	dev_info(dev, "SMMU pa base %llx", (u64)ioaddr);
 
 	if (arm_smmu_resource_size(smmu) > SZ_64K) {
 		smmu->page1 = arm_smmu_ioremap(dev, ioaddr + SZ_64K,

@@ -190,6 +190,37 @@ err_out:
 }
 DEFINE_SHOW_ATTRIBUTE(cd);
 
+static int regs_show(struct seq_file *m, void *unused)
+{
+	struct arm_smmu_master *master;
+	struct arm_smmu_device *smmu;
+	struct device *dev;
+
+
+	mutex_lock(&lock);
+
+	dev = bus_find_device_by_name(&pci_bus_type, NULL, dump_pci_dev);
+	if (!dev) {
+		mutex_unlock(&lock);
+		pr_err("Failed to find device\n");
+		return -EINVAL;
+	}
+
+	master = arm_smmu_get_master(dev);
+	if (!master) {
+		put_device(dev);
+		mutex_unlock(&lock);
+		return -ENODEV;
+	}
+	smmu = master->smmu;
+	seq_printf(m, "SMMUv3 register base at 0x%llx device: %s\n", (u64)smmu->base, dev_name(dev));
+	put_device(dev);
+	mutex_unlock(&lock);
+
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(regs);
+
 void arm_smmu_debugfs_init(void)
 {
 	mutex_init(&lock);
@@ -212,6 +243,8 @@ void arm_smmu_debugfs_init(void)
 	debugfs_create_file("ste", 0444, arm_smmu_debug, NULL, &ste_fops);
 
 	debugfs_create_file("cd", 0444, arm_smmu_debug, NULL, &cd_fops);
+
+	debugfs_create_file("registers", 0444, arm_smmu_debug, NULL, &regs_fops);
 
 }
 
