@@ -190,6 +190,154 @@ err_out:
 }
 DEFINE_SHOW_ATTRIBUTE(cd);
 
+static void __ptdump(arm_lpae_iopte *ptep, int lvl, u64 va,
+		     struct arm_lpae_io_pgtable *data, struct seq_file *m)
+{
+	arm_lpae_iopte pte, *ptep_next;
+	u64 i, tmp_va = 0;
+	int entry_num;
+
+	entry_num = 1 << (data->bits_per_level + ARM_LPAE_PGD_IDX(lvl, data));
+
+	for (i = 0; i < entry_num; i++) {
+		pte = READ_ONCE(*(ptep + i));
+		if (!pte)
+			continue;
+
+		tmp_va = va | (i << ARM_LPAE_LVL_SHIFT(lvl, data));
+
+		if (iopte_leaf(pte, lvl, data->iop.fmt)) {
+			/* To do: print prot */
+			seq_printf(m, "iova: %llx -> pa: %llx\n", tmp_va,
+				   iopte_to_paddr(pte, data));
+			continue;
+		}
+
+		ptep_next = iopte_deref(pte, data);
+		__ptdump(ptep_next, lvl + 1, tmp_va, data, m);
+	}
+}
+
+static void ptdump(struct seq_file *m, struct arm_smmu_domain *domain,
+		   void *pgd, int stage)
+{
+	struct arm_lpae_io_pgtable *data, data_sva;
+	int levels, va_bits, bits_per_level;
+	struct io_pgtable_ops *ops;
+	arm_lpae_iopte *ptep = pgd;
+
+	if (stage == 1 && !pasid) {
+		ops = domain->pgtbl_ops;
+		data = io_pgtable_ops_to_data(ops);
+	} else {
+		va_bits = VA_BITS - PAGE_SHIFT;
+		bits_per_level = PAGE_SHIFT - ilog2(sizeof(arm_lpae_iopte));
+		levels = DIV_ROUND_UP(va_bits, bits_per_level);
+
+		data_sva.start_level = ARM_LPAE_MAX_LEVELS - levels;
+		data_sva.pgd_bits = va_bits - (bits_per_level * (levels - 1));
+		data_sva.bits_per_level = bits_per_level;
+		data_sva.pgd = pgd;
+
+		data = &data_sva;
+	}
+
+	__ptdump(ptep, data->start_level, 0, data, m);
+}
+
+static int pt_dump_s1_show(struct seq_file *m, void *unused)
+{
+	struct arm_smmu_master *master;
+	struct arm_smmu_domain *sdomain;
+	struct iommu_domain *domain;
+	struct device *dev;
+	struct arm_smmu_cd *cd;
+	void *pgd;
+	u64 ttbr;
+	int ret;
+
+	mutex_lock(&lock);
+
+	dev = bus_find_device_by_name(&pci_bus_type, NULL, dump_pci_dev);
+	if (!dev) {
+		mutex_unlock(&lock);
+		pr_err("Failed to find device\n");
+		return -EINVAL;
+	}
+
+	master = arm_smmu_get_master(dev);
+	if (!master) {
+		ret = -ENODEV;
+		goto err_out;
+	}
+	domain = iommu_get_domain_for_dev(dev);
+	if (!domain) {
+		ret = -ENODEV;
+		goto err_out;
+	}
+
+	sdomain = to_smmu_domain(domain);
+
+	cd = arm_smmu_get_cd_ptr(master, pasid);
+	if (!cd || !(le64_to_cpu(cd->data[0]) & CTXDESC_CD_0_V)) {
+		ret = -EINVAL;
+		pr_err("Failed to find valid cd(ssid: %u)\n", pasid);
+		goto err_out;
+	}
+
+	/* CD0 and other CDx are all using ttbr0 */
+	ttbr = le64_to_cpu(cd->data[1]) & CTXDESC_CD_1_TTB0_MASK;
+	pgd = phys_to_virt(ttbr);
+
+	if (ttbr) {
+		seq_printf(m, "SMMUv3 dump page table for device %s, stage 1, ssid 0x%x:\n",
+			   dev_name(dev), pasid);
+		ptdump(m, sdomain, pgd, 1);
+	}
+
+	put_device(dev);
+	mutex_unlock(&lock);
+
+	return 0;
+
+err_out:
+	put_device(dev);
+	mutex_unlock(&lock);
+	return ret;
+}
+DEFINE_SHOW_ATTRIBUTE(pt_dump_s1);
+
+static int regs_show(struct seq_file *m, void *unused)
+{
+	struct arm_smmu_master *master;
+	struct arm_smmu_device *smmu;
+	struct device *dev;
+
+
+	mutex_lock(&lock);
+
+	dev = bus_find_device_by_name(&pci_bus_type, NULL, dump_pci_dev);
+	if (!dev) {
+		mutex_unlock(&lock);
+		pr_err("Failed to find device\n");
+		return -EINVAL;
+	}
+
+	master = arm_smmu_get_master(dev);
+	if (!master) {
+		put_device(dev);
+		mutex_unlock(&lock);
+		return -ENODEV;
+	}
+	smmu = master->smmu;
+	seq_printf(m, "SMMUv3 register base at 0x%llx device: %s\n", (u64)smmu->base, dev_name(dev));
+	put_device(dev);
+	mutex_unlock(&lock);
+
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(regs);
+
 void arm_smmu_debugfs_init(void)
 {
 	mutex_init(&lock);
@@ -212,6 +360,8 @@ void arm_smmu_debugfs_init(void)
 	debugfs_create_file("ste", 0444, arm_smmu_debug, NULL, &ste_fops);
 
 	debugfs_create_file("cd", 0444, arm_smmu_debug, NULL, &cd_fops);
+
+	debugfs_create_file("registers", 0444, arm_smmu_debug, NULL, &regs_fops);
 
 }
 
