@@ -47,12 +47,12 @@ int iommufd_vfio_compat_ioas_get_id(struct iommufd_ctx *ictx, u32 *out_ioas_id)
 EXPORT_SYMBOL_NS_GPL(iommufd_vfio_compat_ioas_get_id, "IOMMUFD_VFIO");
 
 /**
- * iommufd_vfio_compat_set_no_iommu - Called when a no-iommu device is attached
+ * iommufd_vfio_set_no_iommu - Called when a no-iommu device is attached
  * @ictx: Context to operate on
  *
  * This allows selecting the VFIO_NOIOMMU_IOMMU and blocks normal types.
  */
-int iommufd_vfio_compat_set_no_iommu(struct iommufd_ctx *ictx)
+int iommufd_vfio_set_no_iommu(struct iommufd_ctx *ictx)
 {
 	int ret;
 
@@ -66,7 +66,7 @@ int iommufd_vfio_compat_set_no_iommu(struct iommufd_ctx *ictx)
 	xa_unlock(&ictx->objects);
 	return ret;
 }
-EXPORT_SYMBOL_NS_GPL(iommufd_vfio_compat_set_no_iommu, "IOMMUFD_VFIO");
+EXPORT_SYMBOL_NS_GPL(iommufd_vfio_set_no_iommu, "IOMMUFD_VFIO");
 
 /**
  * iommufd_vfio_compat_ioas_create - Ensure the compat IOAS is created
