@@ -132,6 +132,12 @@ long vfio_df_ioctl_bind_iommufd(struct vfio_device_file *df,
 		goto out_unlock;
 	}
 
+	if (device->noiommu) {
+		ret = iommufd_vfio_set_no_iommu(df->iommufd);
+		if (ret)
+			goto out_unlock;
+	}
+
 	/*
 	 * Before the device open, get the KVM pointer currently
 	 * associated with the device file (if there is) and obtain
