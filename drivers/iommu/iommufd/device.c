@@ -1089,6 +1089,18 @@ void iommufd_access_destroy_object(struct iommufd_object *obj)
 	iommufd_ctx_put(access->ictx);
 }
 
+u32 iommufd_access_to_id(struct iommufd_access *iaccess)
+{
+	return iaccess->obj.id;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_access_to_id, "IOMMUFD");
+
+struct iommufd_ctx *iommufd_access_to_ictx(struct iommufd_access *iaccess)
+{
+	return iaccess->ictx;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_access_to_ictx, "IOMMUFD");
+
 /**
  * iommufd_access_create - Create an iommufd_access
  * @ictx: iommufd file descriptor

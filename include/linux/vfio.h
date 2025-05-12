@@ -63,6 +63,7 @@ struct vfio_device {
 	unsigned int open_count;
 	struct completion comp;
 	struct iommufd_access *iommufd_access;
+	struct iommufd_access *noiommu_access;
 	void (*put_kvm)(struct kvm *kvm);
 	struct inode *inode;
 #if IS_ENABLED(CONFIG_IOMMUFD)
@@ -71,6 +72,7 @@ struct vfio_device {
 	u8 iommufd_attached:1;
 #endif
 	u8 cdev_opened:1;
+	u8 noiommu:1;
 #ifdef CONFIG_DEBUG_FS
 	/*
 	 * debug_root is a static property of the vfio_device
@@ -154,6 +156,10 @@ int vfio_iommufd_emulated_bind(struct vfio_device *vdev,
 void vfio_iommufd_emulated_unbind(struct vfio_device *vdev);
 int vfio_iommufd_emulated_attach_ioas(struct vfio_device *vdev, u32 *pt_id);
 void vfio_iommufd_emulated_detach_ioas(struct vfio_device *vdev);
+int vfio_iommufd_noiommu_bind(struct vfio_device *vdev,
+									 struct iommufd_ctx *ictx,
+									 u32 *out_device_id);
+void vfio_iommufd_noiommu_unbind(struct vfio_device *vdev);
 #else
 static inline struct iommufd_ctx *
 vfio_iommufd_device_ictx(struct vfio_device *vdev)
@@ -188,6 +194,11 @@ vfio_iommufd_get_dev_id(struct vfio_device *vdev, struct iommufd_ctx *ictx)
 #define vfio_iommufd_emulated_attach_ioas \
 	((int (*)(struct vfio_device *vdev, u32 *pt_id)) NULL)
 #define vfio_iommufd_emulated_detach_ioas \
+	((void (*)(struct vfio_device *vdev)) NULL)
+#define vfio_iommufd_noiommu_bind \
+	((void (*)(struct vfio_device *vdev, \
+		 struct iommufd_ctx *ictx, u32 *out_device_id)) NULL)
+#define vfio_iommufd_noiommu_unbind \
 	((void (*)(struct vfio_device *vdev)) NULL)
 #endif
 

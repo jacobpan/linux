@@ -86,6 +86,8 @@ void iommufd_access_destroy(struct iommufd_access *access);
 int iommufd_access_attach(struct iommufd_access *access, u32 ioas_id);
 int iommufd_access_replace(struct iommufd_access *access, u32 ioas_id);
 void iommufd_access_detach(struct iommufd_access *access);
+u32 iommufd_access_to_id(struct iommufd_access *iaccess);
+struct iommufd_ctx *iommufd_access_to_ictx(struct iommufd_access *iaccess);
 
 void iommufd_ctx_get(struct iommufd_ctx *ictx);
 
@@ -145,7 +147,7 @@ int iommufd_access_rw(struct iommufd_access *access, unsigned long iova,
 		      void *data, size_t len, unsigned int flags);
 int iommufd_vfio_compat_ioas_get_id(struct iommufd_ctx *ictx, u32 *out_ioas_id);
 int iommufd_vfio_compat_ioas_create(struct iommufd_ctx *ictx);
-int iommufd_vfio_compat_set_no_iommu(struct iommufd_ctx *ictx);
+int iommufd_vfio_set_no_iommu(struct iommufd_ctx *ictx);
 #else /* !CONFIG_IOMMUFD */
 static inline struct iommufd_ctx *iommufd_ctx_from_file(struct file *file)
 {
@@ -182,7 +184,7 @@ static inline int iommufd_vfio_compat_ioas_create(struct iommufd_ctx *ictx)
 	return -EOPNOTSUPP;
 }
 
-static inline int iommufd_vfio_compat_set_no_iommu(struct iommufd_ctx *ictx)
+static inline int iommufd_vfio_set_no_iommu(struct iommufd_ctx *ictx)
 {
 	return -EOPNOTSUPP;
 }

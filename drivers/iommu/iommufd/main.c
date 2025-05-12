@@ -95,6 +95,23 @@ struct iommufd_object *iommufd_get_object(struct iommufd_ctx *ictx, u32 id,
 	return obj;
 }
 
+struct iommufd_object *iommufd_find_object_by_type(struct iommufd_ctx *ictx,
+						   enum iommufd_object_type type)
+{
+	struct iommufd_object *obj;
+	unsigned long index;
+
+	lockdep_assert_held(&ictx->objects.xa_lock);
+	xa_for_each(&ictx->objects, index, obj) {
+		pr_info("iommufd_find_object_by_type: %d:%d\n", type, obj->type);
+		if (obj->type == type)
+			goto out;
+	}
+	obj = ERR_PTR(-ENOENT);
+out:
+	return obj;
+}
+
 static int iommufd_object_dec_wait_shortterm(struct iommufd_ctx *ictx,
 					     struct iommufd_object *to_destroy)
 {

@@ -316,9 +316,7 @@ static int __vfio_register_dev(struct vfio_device *device,
 
 	if (WARN_ON(IS_ENABLED(CONFIG_IOMMUFD) &&
 		    (!device->ops->bind_iommufd ||
-		     !device->ops->unbind_iommufd ||
-		     !device->ops->attach_ioas ||
-		     !device->ops->detach_ioas)))
+		     !device->ops->unbind_iommufd)))
 		return -EINVAL;
 
 	/*
@@ -328,14 +326,18 @@ static int __vfio_register_dev(struct vfio_device *device,
 	if (!device->dev_set)
 		vfio_assign_device_set(device, device);
 
-	ret = dev_set_name(&device->device, "vfio%d", device->index);
-	if (ret)
-		return ret;
-
 	ret = vfio_device_set_group(device, type);
 	if (ret)
 		return ret;
 
+	ret = vfio_device_set_no_iommu(device);
+	if (ret)
+		goto err_out;
+
+	ret = dev_set_name(&device->device, "%svfio%d",
+					   device->noiommu ? "noiommu-" : "", device->index);
+	if (ret)
+		goto err_out;
 	/*
 	 * VFIO always sets IOMMU_CACHE because we offer no way for userspace to
 	 * restore cache coherency. It has to be checked here because it is only

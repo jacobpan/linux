@@ -146,16 +146,36 @@ static const struct vfio_device_ops vfio_pci_ops = {
 	.pasid_detach_ioas	= vfio_iommufd_physical_pasid_detach_ioas,
 };
 
+static const struct vfio_device_ops vfio_pci_noiommu_ops = {
+	.name		= "vfio-pci-noiommu",
+	.init		= vfio_pci_core_init_dev,
+	.release	= vfio_pci_core_release_dev,
+	.open_device	= vfio_pci_open_device,
+	.close_device	= vfio_pci_core_close_device,
+	.ioctl		= vfio_pci_core_ioctl,
+	.device_feature = vfio_pci_core_ioctl_feature,
+	.read		= vfio_pci_core_read,
+	.write		= vfio_pci_core_write,
+	.mmap		= vfio_pci_core_mmap,
+	.request	= vfio_pci_core_request,
+	.match		= vfio_pci_core_match,
+	.bind_iommufd	= vfio_iommufd_noiommu_bind,
+	.unbind_iommufd	= vfio_iommufd_noiommu_unbind,
+};
+
 static int vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
+	const struct vfio_device_ops *ops = &vfio_pci_ops;
 	struct vfio_pci_core_device *vdev;
 	int ret;
 
 	if (vfio_pci_is_denylisted(pdev))
 		return -EINVAL;
 
-	vdev = vfio_alloc_device(vfio_pci_core_device, vdev, &pdev->dev,
-				 &vfio_pci_ops);
+	if (IS_ENABLED(CONFIG_VFIO_NOIOMMU) && !pdev->dev.iommu)
+		ops = &vfio_pci_noiommu_ops;
+
+	vdev = vfio_alloc_device(vfio_pci_core_device, vdev, &pdev->dev, ops);
 	if (IS_ERR(vdev))
 		return PTR_ERR(vdev);
 

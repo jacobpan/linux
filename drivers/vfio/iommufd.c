@@ -18,6 +18,43 @@ bool vfio_iommufd_device_has_compat_ioas(struct vfio_device *vdev,
 	return !iommufd_vfio_compat_ioas_get_id(ictx, &ioas_id);
 }
 
+static void vfio_noiommu_access_unmap(void *data, unsigned long iova,
+									  unsigned long length)
+{
+}
+
+static const struct iommufd_access_ops vfio_user_noiommu_ops = {
+	.needs_pin_pages = 1,
+	.unmap = vfio_noiommu_access_unmap,
+};
+
+int vfio_iommufd_noiommu_bind(struct vfio_device *vdev,
+									 struct iommufd_ctx *ictx,
+									 u32 *out_device_id)
+{
+	struct iommufd_access *user;
+
+	lockdep_assert_held(&vdev->dev_set->lock);
+	user = iommufd_access_create(ictx, &vfio_user_noiommu_ops,
+								 vdev, out_device_id);
+	if (IS_ERR(user))
+		return PTR_ERR(user);
+	vdev->noiommu_access = user;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_noiommu_bind);
+
+void vfio_iommufd_noiommu_unbind(struct vfio_device *vdev)
+{
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (vdev->noiommu_access) {
+		iommufd_access_destroy(vdev->noiommu_access);
+		vdev->noiommu_access = NULL;
+	}
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_noiommu_unbind);
+
 int vfio_df_iommufd_bind(struct vfio_device_file *df)
 {
 	struct vfio_device *vdev = df->device;
@@ -54,9 +91,6 @@ void vfio_df_iommufd_unbind(struct vfio_device_file *df)
 
 	lockdep_assert_held(&vdev->dev_set->lock);
 
-	if (vfio_device_is_noiommu(vdev))
-		return;
-
 	if (vdev->ops->unbind_iommufd)
 		vdev->ops->unbind_iommufd(vdev);
 }
@@ -65,6 +99,8 @@ struct iommufd_ctx *vfio_iommufd_device_ictx(struct vfio_device *vdev)
 {
 	if (vdev->iommufd_device)
 		return iommufd_device_to_ictx(vdev->iommufd_device);
+	else if (vdev->noiommu_access)
+		return iommufd_access_to_ictx(vdev->noiommu_access);
 	return NULL;
 }
 EXPORT_SYMBOL_GPL(vfio_iommufd_device_ictx);
@@ -73,6 +109,9 @@ static int vfio_iommufd_device_id(struct vfio_device *vdev)
 {
 	if (vdev->iommufd_device)
 		return iommufd_device_to_id(vdev->iommufd_device);
+	else if (vdev->noiommu_access)
+		return iommufd_access_to_id(vdev->noiommu_access);
+
 	return -EINVAL;
 }
 
