@@ -10,12 +10,16 @@
  */
 #ifndef _UAPIVFIO_H
 #define _UAPIVFIO_H
-
+#define _GNU_SOURCE  
 #include <linux/types.h>
 #include <linux/ioctl.h>
 #include <sys/eventfd.h>
 #include <sys/poll.h>
 #include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 #define VFIO_API_VERSION	0
 
@@ -59,6 +63,12 @@ struct iommu_ioas_alloc {
 	__u32 out_ioas_id;
 };
 #define IOMMU_IOAS_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_ALLOC)
+
+struct iommu_destroy {
+	__u32 size;
+	__u32 id;
+};
+#define IOMMU_DESTROY _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DESTROY)
 
 /* Extensions */
 
@@ -682,10 +692,9 @@ static void test_device_msix(int device_fd)
     memcpy(irq_set->data, event_fds, sizeof(int) * vector_count);
     CHECK_IOCTL(device_fd, VFIO_DEVICE_SET_IRQS, irq_set, "Failed to enable MSI-X interrupts");
     free(irq_set);
-
 }
 
-void ioas_test(int iommufd)
+int ioas_alloc(int iommufd)
 {
     struct iommu_ioas_alloc ioas_alloc = {
         .size = sizeof(ioas_alloc),
@@ -693,11 +702,20 @@ void ioas_test(int iommufd)
 
     if (ioctl(iommufd, IOMMU_IOAS_ALLOC, &ioas_alloc) != 0) {
         perror("IOAS_ALLOC");
-        close(iommufd);
+		return -1;
     }
 
     printf("Allocated IOAS with ID: %u\n", ioas_alloc.out_ioas_id);
+	return ioas_alloc.out_ioas_id;
+}
 
+int ioas_destroy(int iommufd, uint32_t ioas_id) {
+    struct iommu_destroy destroy = {
+        .size = sizeof(struct iommu_destroy),
+        .id = ioas_id,
+    };
+	printf("Destroying IOAS with ID: %u\n", ioas_id);
+    return ioctl(iommufd, IOMMU_DESTROY, &destroy);
 }
 
 static int vfio_test_hot_reset(int devfd)
@@ -743,9 +761,34 @@ static int vfio_test_hot_reset(int devfd)
 	reset->flags = 0;
 
 	ret = ioctl(devfd, VFIO_DEVICE_PCI_HOT_RESET, reset);
-	printf("HOT RESET : %s, ret %d errno %d\n", ret ? "Failed" : "Pass", );
+	printf("HOT RESET : %s, ret %d errno %d\n", ret ? "Failed" : "Pass", ret, errno);
 
 	return 0;
+}
+
+int iommufd_bind( int iommufd, int devfd)
+{
+	struct vfio_device_bind_iommufd bind = {
+		.argsz = sizeof(bind),
+		.flags = 0,
+		.iommufd = iommufd,
+		.out_devid = 0,
+	};
+
+	if (ioctl(devfd, VFIO_DEVICE_BIND_IOMMUFD, &bind)) {
+		printf("Failed to bind device to iommufd %d\n", iommufd);
+		return -1;
+	}
+	printf("IOMMUFD bind succeeded\n");
+	return 0;
+}
+
+void device_reset(int devfd)
+{
+	if (ioctl(devfd, VFIO_DEVICE_RESET))
+	    perror("VFIO_DEVICE_RESET failed");
+	else
+	    printf("reset device successfully\n");
 }
 
 int iommufd_noiommu_test(const char *bdf)
@@ -753,6 +796,8 @@ int iommufd_noiommu_test(const char *bdf)
 	char *vfio_id = NULL;
 	char *path = NULL;
 	int devfd;
+	int ioas_id;
+
 	struct vfio_device_bind_iommufd bind = {
 		.argsz = sizeof(bind),
 		.flags = 0,
@@ -762,9 +807,6 @@ int iommufd_noiommu_test(const char *bdf)
 		printf("Failed to open /dev/iommu!\n");
 		return -1;
 	}
-	ioas_test(__iommufd);
-
-	bind.iommufd = __iommufd;
 
 	vfio_id = pci_get_device_vfio_id(bdf);
 	if (!vfio_id) {
@@ -784,36 +826,27 @@ int iommufd_noiommu_test(const char *bdf)
 		return -1;
 	}
 	printf("Opened device node %s %s\n", path, bdf);
-
-	trace_write("reset device\n");
-	if (ioctl(devfd, VFIO_DEVICE_RESET))
-	    perror("VFIO_DEVICE_RESET failed");
-	else
-	    printf("reset device successfully\n");
-
-	trace_write("IOMMUFD bind\n");
-	printf("IOMMUFD bind\n");
-	if (ioctl(devfd, VFIO_DEVICE_BIND_IOMMUFD, &bind)) {
-		printf("could not bind device to iommufd %d\n", __iommufd);
-		goto close_dev;
-	}
-	
-	ioas_test(__iommufd);
-	
-	if (ioctl(devfd, VFIO_DEVICE_RESET))
-	    perror("VFIO_DEVICE_RESET failed");
-	else
-	    printf("reset device successfully\n");
+//	printf("Resetting device, Expect to fail\n");
+//	device_reset(devfd);
+	printf("IOAS alloc test. Expect to succeed!\n");
+	ioas_id = ioas_alloc(__iommufd);
+	printf("IOMMUFD bind test. Expect to fail!\n");
+	iommufd_bind(__iommufd, devfd);
+	ioas_destroy(__iommufd, ioas_id);
+	printf("IOMMUFD bind test. Expect to succeed!\n");
+	iommufd_bind(__iommufd, devfd);
+	printf("Resetting device, Expect to succeed\n");
+	device_reset(devfd);
+	printf("IOAS alloc test. Expect to fail!\n");
+	ioas_alloc(__iommufd);
 
 	vfio_test_hot_reset(devfd);
-	ioas_test(__iommufd);
 	vfio_test_device_info(devfd);
 
 	test_device_msix(devfd);
-	return 0;
-close_dev:
+
 	close(devfd);
-	return -1;
+	return 0;
 }
 
 int main(int argc, char **argv)
