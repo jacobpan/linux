@@ -142,6 +142,8 @@ static inline bool iommufd_lock_obj(struct iommufd_object *obj)
 	}
 	return true;
 }
+struct iommufd_object *iommufd_find_object_by_type(struct iommufd_ctx *ictx,
+	enum iommufd_object_type type);
 
 struct iommufd_object *iommufd_get_object(struct iommufd_ctx *ictx, u32 id,
 					  enum iommufd_object_type type);
