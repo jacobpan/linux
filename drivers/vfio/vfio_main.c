@@ -339,6 +339,8 @@ static int __vfio_register_dev(struct vfio_device *device,
 					   device->noiommu ? "noiommu-" : "", device->index);
 	if (ret)
 		goto err_out;
+	pr_alert("skip checking cap cache coherency for device %s\n", dev_name(device->dev));
+#if 0
 	/*
 	 * VFIO always sets IOMMU_CACHE because we offer no way for userspace to
 	 * restore cache coherency. It has to be checked here because it is only
@@ -349,7 +351,7 @@ static int __vfio_register_dev(struct vfio_device *device,
 		ret = -EINVAL;
 		goto err_out;
 	}
-
+#endif
 	ret = vfio_device_add(device);
 	if (ret)
 		goto err_out;

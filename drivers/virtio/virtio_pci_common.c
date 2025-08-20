@@ -684,7 +684,7 @@ static int virtio_pci_probe(struct pci_dev *pci_dev,
 {
 	struct virtio_pci_device *vp_dev, *reg_dev = NULL;
 	int rc;
-
+	pr_alert("%s: probing device %s\n", __func__, dev_name(&pci_dev->dev));
 	/* allocate our structure and fill it out */
 	vp_dev = kzalloc(sizeof(struct virtio_pci_device), GFP_KERNEL);
 	if (!vp_dev)
