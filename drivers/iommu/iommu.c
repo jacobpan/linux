@@ -3,7 +3,7 @@
  * Copyright (C) 2007-2008 Advanced Micro Devices, Inc.
  * Author: Joerg Roedel <jroedel@suse.de>
  */
-
+#define DEBUG
 #define pr_fmt(fmt)    "iommu: " fmt
 
 #include <linux/amba/bus.h>
@@ -298,7 +298,6 @@ void iommu_device_unregister(struct iommu_device *iommu)
 }
 EXPORT_SYMBOL_GPL(iommu_device_unregister);
 
-#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
 void iommu_device_unregister_bus(struct iommu_device *iommu,
 				 const struct bus_type *bus,
 				 struct notifier_block *nb)
@@ -327,6 +326,7 @@ int iommu_device_register_bus(struct iommu_device *iommu,
 		return err;
 
 	spin_lock(&iommu_device_lock);
+	pr_alert("Registering IOMMU device %p, noiommu=%d\n", iommu, ops->no_iommu);
 	list_add_tail(&iommu->list, &iommu_device_list);
 	spin_unlock(&iommu_device_lock);
 
@@ -338,7 +338,6 @@ int iommu_device_register_bus(struct iommu_device *iommu,
 	return 0;
 }
 EXPORT_SYMBOL_GPL(iommu_device_register_bus);
-#endif
 
 static struct dev_iommu *dev_iommu_get(struct device *dev)
 {
@@ -417,8 +416,10 @@ static int iommu_init_device(struct device *dev)
 	struct iommu_group *group;
 	int ret;
 
+	dev_dbg(dev, "Initializing device for IOMMU support\n");
 	if (!dev_iommu_get(dev))
 		return -ENOMEM;
+	dev_dbg(dev, "%s for IOMMU support\n", __func__);
 	/*
 	 * For FDT-based systems and ACPI IORT/VIOT, the common firmware parsing
 	 * is buried in the bus dma_configure path. Properly unpicking that is
@@ -434,6 +435,8 @@ static int iommu_init_device(struct device *dev)
 		if (!dev->iommu || dev->iommu_group)
 			return -ENODEV;
 	}
+	// TODO: noiommu driver is conflicting with selttest driver. they should
+	// be enable to coexist
 	/*
 	 * At this point, relevant devices either now have a fwspec which will
 	 * match ops registered with a non-NULL fwnode, or we can reasonably
@@ -446,22 +449,26 @@ static int iommu_init_device(struct device *dev)
 		ret = -ENODEV;
 		goto err_free;
 	}
-
+	dev_dbg(dev, "Found IOMMU ops owner %s, no_iommu %d\n",
+			ops->owner->name, ops->no_iommu);
 	if (!try_module_get(ops->owner)) {
 		ret = -EINVAL;
 		goto err_free;
 	}
-
+	dev_dbg(dev, "calling IOMMU probe_device op");
 	iommu_dev = ops->probe_device(dev);
 	if (IS_ERR(iommu_dev)) {
 		ret = PTR_ERR(iommu_dev);
+//		pr_alert("fake probing result success\n");
 		goto err_module_put;
 	}
 	dev->iommu->iommu_dev = iommu_dev;
+	dev_dbg(dev, "IOMMU device  registered\n");
 
 	ret = iommu_device_link(iommu_dev, dev);
 	if (ret)
 		goto err_release;
+	dev_dbg(dev, "IOMMU device linked sysfs\n");
 
 	group = ops->device_group(dev);
 	if (WARN_ON_ONCE(group == NULL))
@@ -562,6 +569,9 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 	struct group_device *gdev;
 	int ret;
 
+	dev_dbg(dev, "%s Probing device for IOMMU support\n", __func__);
+	if (dev->driver)
+		dev_WARN(dev, "driver already bound, something fishy here!\n");
 	/*
 	 * Serialise to avoid races between IOMMU drivers registering in
 	 * parallel and/or the "replay" calls from ACPI/OF code via client
@@ -647,7 +657,7 @@ int iommu_probe_device(struct device *dev)
 	mutex_unlock(&iommu_probe_device_lock);
 	if (ret)
 		return ret;
-
+	dev_dbg(dev, "Probed device for IOMMU support\n");
 	ops = dev_iommu_ops(dev);
 	if (ops->probe_finalize)
 		ops->probe_finalize(dev);
@@ -1747,7 +1757,7 @@ static int iommu_bus_notifier(struct notifier_block *nb,
 
 	if (action == BUS_NOTIFY_ADD_DEVICE) {
 		int ret;
-
+		pr_alert("%s: adding device %s\n", __func__, dev_name(dev));
 		ret = iommu_probe_device(dev);
 		return (ret) ? NOTIFY_DONE : NOTIFY_OK;
 	} else if (action == BUS_NOTIFY_REMOVED_DEVICE) {
@@ -1884,14 +1894,14 @@ static int bus_iommu_probe(const struct bus_type *bus)
 	struct iommu_group *group, *next;
 	LIST_HEAD(group_list);
 	int ret;
-
+	pr_alert("IOMMU bus probing %s\n", bus->name);
 	ret = bus_for_each_dev(bus, NULL, &group_list, probe_iommu_group);
 	if (ret)
 		return ret;
 
 	list_for_each_entry_safe(group, next, &group_list, entry) {
 		struct group_device *gdev;
-
+		pr_alert("IOMMU group %u probing\n", group->id);
 		mutex_lock(&group->mutex);
 
 		/* Remove item from the list */
@@ -2860,11 +2870,17 @@ static const struct iommu_device *iommu_from_fwnode(const struct fwnode_handle *
 	const struct iommu_device *iommu, *ret = NULL;
 
 	spin_lock(&iommu_device_lock);
-	list_for_each_entry(iommu, &iommu_device_list, list)
+	list_for_each_entry(iommu, &iommu_device_list, list) {
+		//!!! why noiommu ops is not here?
+		pr_alert("%s iommu_device_list entry %p, no_iommu %d\n",
+			 __func__, iommu, iommu->ops->no_iommu);
+		pr_alert("%s iommu fwnode %p, fwnode %p\n",
+			 __func__, iommu->fwnode, fwnode);
 		if (iommu->fwnode == fwnode) {
 			ret = iommu;
 			break;
 		}
+	}
 	spin_unlock(&iommu_device_lock);
 	return ret;
 }

@@ -359,6 +359,15 @@ config HYPERV_IOMMU
 	  Stub IOMMU driver to handle IRQs to support Hyper-V Linux
 	  guest and root partitions.
 
+config NOIOMMU_IOMMU
+	bool "No IOMMU support"
+	depends on PCI
+	select IOMMU_API
+	help
+	  This option allows you to use IOMMUFD for devices that would
+	  otherwise must be backed by a hardware IOMMU.
+	  If unsure, say N here.
+
 config VIRTIO_IOMMU
 	tristate "Virtio IOMMU driver"
 	depends on VIRTIO

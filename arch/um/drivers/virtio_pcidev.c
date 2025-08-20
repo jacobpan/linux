@@ -537,6 +537,7 @@ static int virtio_pcidev_virtio_probe(struct virtio_device *vdev)
 	struct virtio_pcidev_device *dev;
 	int err;
 
+	pr_alert("%s: probing device %s\n", __func__, dev_name(vdev->dev));
 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (!dev)
 		return -ENOMEM;

@@ -44,8 +44,10 @@ int iommufd_ioas_alloc_ioctl(struct iommufd_ucmd *ucmd)
 	if (cmd->flags)
 		return -EOPNOTSUPP;
 
-	if (ucmd->ictx->no_iommu_mode)
-		return -EINVAL;
+	if (ucmd->ictx->no_iommu_mode) {
+		pr_alert("%s: no IOMMU mode is enabled, proceed anyway\n", __func__);
+		//return -EINVAL;
+	}
 
 	ioas = iommufd_ioas_alloc(ucmd->ictx);
 	if (IS_ERR(ioas))

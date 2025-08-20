@@ -28,7 +28,7 @@ static inline const struct iommu_ops *iommu_fwspec_ops(struct iommu_fwspec *fwsp
 }
 
 void iommu_fwspec_free(struct device *dev);
-
+struct iommu_device *get_noiommu_dev(void);
 int iommu_device_register_bus(struct iommu_device *iommu,
 			      const struct iommu_ops *ops,
 			      const struct bus_type *bus,
