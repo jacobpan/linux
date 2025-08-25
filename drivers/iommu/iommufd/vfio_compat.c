@@ -57,10 +57,12 @@ int iommufd_vfio_set_no_iommu(struct iommufd_ctx *ictx)
 	int ret = 0;
 
 	xa_lock(&ictx->objects);
-	if (ictx->vfio_ioas || !IS_ERR_OR_NULL(iommufd_find_object_by_type(ictx, IOMMUFD_OBJ_IOAS)))
-		ret = -EINVAL;
-	else
-		ictx->no_iommu_mode = 1;
+	if (ictx->vfio_ioas || !IS_ERR_OR_NULL(iommufd_find_object_by_type(ictx, IOMMUFD_OBJ_IOAS))) {
+		pr_alert("FIXME: keep no-iommu mode supported with existing IOAS\n");
+		ret = 0;
+	} 
+	ictx->no_iommu_mode = 1;
+	
 	xa_unlock(&ictx->objects);
 
 	pr_info("IOMMUFD_VFIO: no-iommu mode enable status %d\n", ret);

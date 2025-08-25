@@ -154,9 +154,21 @@ static struct iommu_domain noiommu_blocking_domain = {
 	.ops = &mock_identity_ops,
 };
 
+static bool noiommu_capable(struct device *dev, enum iommu_cap cap)
+{
+	switch (cap) {
+	case IOMMU_CAP_CACHE_COHERENCY:
+		dev_alert(dev, "fake noIOMMU support for cache coherency\n");
+		return true;
+	default:
+		return false;
+	}
+}
+
 static struct iommu_ops noiommu_ops = {
 	.default_domain = &noiommu_identity_domain,
 	.blocked_domain = &noiommu_blocking_domain,
+	.capable		= noiommu_capable,
 	.domain_alloc = noiommu_domain_alloc,
    	.probe_device		= noiommu_probe_device,
     .release_device		= noiommu_release_device,
