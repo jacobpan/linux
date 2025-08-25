@@ -826,18 +826,15 @@ int iommufd_noiommu_test(const char *bdf)
 		return -1;
 	}
 	printf("Opened device node %s %s\n", path, bdf);
-//	printf("Resetting device, Expect to fail\n");
-//	device_reset(devfd);
-	printf("IOAS alloc test. Expect to succeed!\n");
+
 	ioas_id = ioas_alloc(__iommufd);
-	printf("IOMMUFD bind test. Expect to fail!\n");
+	printf("IOAS id %d\n", ioas_id);
+
 	iommufd_bind(__iommufd, devfd);
 	ioas_destroy(__iommufd, ioas_id);
-	printf("IOMMUFD bind test. Expect to succeed!\n");
-	iommufd_bind(__iommufd, devfd);
-	printf("Resetting device, Expect to succeed\n");
+
 	device_reset(devfd);
-	printf("IOAS alloc test. Expect to fail!\n");
+
 	ioas_alloc(__iommufd);
 
 	vfio_test_hot_reset(devfd);

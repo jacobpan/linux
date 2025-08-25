@@ -173,10 +173,10 @@ static int vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	pr_alert("%s: probing device %s\n", __func__, dev_name(&pdev->dev));
 	if (vfio_pci_is_denylisted(pdev))
 		return -EINVAL;
-
+#if 0 //use normal bind devops
 	if (IS_ENABLED(CONFIG_VFIO_NOIOMMU))// && !pdev->dev.iommu)
 		ops = &vfio_pci_noiommu_ops;
-
+#endif
 	vdev = vfio_alloc_device(vfio_pci_core_device, vdev, &pdev->dev, ops);
 	if (IS_ERR(vdev))
 		return PTR_ERR(vdev);
