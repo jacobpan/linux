@@ -17,6 +17,7 @@ struct noiommu_dev {
 
 struct noiommu_domain {
 	struct iommu_domain		domain;
+	struct xarray pfns;
 };
 
 struct noiommu_endpoint {
@@ -67,19 +68,32 @@ static int noiommu_attach_dev(struct iommu_domain *domain, struct device *dev)
 	return 0;
 }
 
-static struct iommu_domain *noiommu_domain_alloc(unsigned type)
+enum {
+	NOIOMMU_IO_PAGE_SIZE = PAGE_SIZE / 2,
+	NOIOMMU_APERTURE_START = 1UL << 24,
+	NOIOMMU_APERTURE_LAST = (1UL << 31) - 1,
+};
+static struct iommu_domain *
+noiommu_domain_alloc_paging_flags(struct device *dev, u32 flags,
+			       const struct iommu_user_data *user_data)
 {
-	struct iommu_domain *domain;
+	struct noiommu_domain *noiommu_dom;
 
-    pr_debug("Allocating no IOMMU domain %d\n", type);
-	if (type != IOMMU_DOMAIN_UNMANAGED && type != IOMMU_DOMAIN_DMA)
-		return NULL;
+	if (user_data)
+		return ERR_PTR(-EOPNOTSUPP);
 
-	domain = kzalloc(sizeof(*domain), GFP_KERNEL);
-	if (!domain)
-		return NULL;
+	noiommu_dom = kzalloc(sizeof(*noiommu_dom), GFP_KERNEL);
+	if (!noiommu_dom)
+		return ERR_PTR(-ENOMEM);
 
-	return domain;
+	noiommu_dom->domain.geometry.aperture_start = NOIOMMU_APERTURE_START;
+	noiommu_dom->domain.geometry.aperture_end = NOIOMMU_APERTURE_LAST;
+	noiommu_dom->domain.pgsize_bitmap = NOIOMMU_IO_PAGE_SIZE;
+
+	noiommu_dom->domain.type = IOMMU_DOMAIN_UNMANAGED;
+	xa_init(&noiommu_dom->pfns);
+
+	return &noiommu_dom->domain;
 }
 
 static void noiommu_domain_free(struct iommu_domain *domain)
@@ -91,6 +105,8 @@ static int noiommu_map_pages(struct iommu_domain *domain, unsigned long iova,
 			     phys_addr_t paddr, size_t size, size_t count,
 			     int prot, gfp_t gfp, size_t *mapped)
 {
+	pr_alert("no_iommu: mapping IOVA 0x%lx to PA 0x%lx size 0x%lx\n",
+			iova, (unsigned long)paddr, (unsigned long)size);
 	/* No-op: No page table mappings */
 	if (mapped)
 		*mapped = size;
@@ -102,6 +118,8 @@ static size_t noiommu_unmap_pages(struct iommu_domain *domain,
 				  size_t count,
 				  struct iommu_iotlb_gather *gather)
 {
+	pr_alert("no_iommu: unmapping IOVA 0x%lx size 0x%lx\n",
+			iova, (unsigned long)size);
 	/* No-op: No page table mappings to undo */
 	return size;
 }
@@ -169,7 +187,7 @@ static struct iommu_ops noiommu_ops = {
 	.default_domain = &noiommu_identity_domain,
 	.blocked_domain = &noiommu_blocking_domain,
 	.capable		= noiommu_capable,
-	.domain_alloc = noiommu_domain_alloc,
+	.domain_alloc_paging_flags = noiommu_domain_alloc_paging_flags,
    	.probe_device		= noiommu_probe_device,
     .release_device		= noiommu_release_device,
 	.device_group = generic_device_group,
