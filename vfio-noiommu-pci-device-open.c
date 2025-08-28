@@ -476,6 +476,16 @@ struct vfio_iommu_type1_dma_unmap {
 };
 
 #define VFIO_IOMMU_UNMAP_DMA _IO(VFIO_TYPE, VFIO_BASE + 14)
+struct iommu_ioas_map {
+	__u32 size;
+	__u32 flags;
+	__u32 ioas_id;
+	__u32 __reserved;
+	__aligned_u64 user_va;
+	__aligned_u64 length;
+	__aligned_u64 iova;
+};
+#define IOMMU_IOAS_MAP _IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_MAP)
 
 #endif /* _UAPIVFIO_H */
 
@@ -782,6 +792,11 @@ int iommufd_bind( int iommufd, int devfd)
 	printf("IOMMUFD bind succeeded\n");
 	return 0;
 }
+enum iommufd_ioas_map_flags {
+	IOMMU_IOAS_MAP_FIXED_IOVA = 1 << 0,
+	IOMMU_IOAS_MAP_WRITEABLE = 1 << 1,
+	IOMMU_IOAS_MAP_READABLE = 1 << 2,
+};
 
 void device_reset(int devfd)
 {
@@ -789,6 +804,61 @@ void device_reset(int devfd)
 	    perror("VFIO_DEVICE_RESET failed");
 	else
 	    printf("reset device successfully\n");
+}
+
+static void iommufd_ioas_map(int iommufd, int ioas_id, uint64_t iova, uint64_t paddr, uint64_t size)
+{
+	struct iommu_ioas_map map = {
+		.size = sizeof(map),
+		.flags = IOMMU_IOAS_MAP_READABLE,
+		.ioas_id = ioas_id,
+		.iova = iova,
+		.user_va = paddr,
+		.length = size,
+	};
+
+	if (ioctl(iommufd, IOMMU_IOAS_MAP, &map) != 0) {
+		perror("IOMMU_IOAS_MAP");
+	}
+	printf("Successfully mapped iommufd %d IOAS %d IOVA 0x%lx to VA 0x%lx size 0x%lx\n",
+	       iommufd, ioas_id, (unsigned long)iova, (unsigned long)paddr,
+	       (unsigned long)size);
+}
+
+struct vfio_device_attach_iommufd_pt {
+	__u32	argsz;
+	__u32	flags;
+#define VFIO_DEVICE_ATTACH_PASID	(1 << 0)
+	__u32	pt_id;
+	__u32	pasid;
+};
+#define VFIO_DEVICE_ATTACH_IOMMUFD_PT		_IO(VFIO_TYPE, VFIO_BASE + 19)
+
+struct vfio_device_detach_iommufd_pt {
+	__u32	argsz;
+	__u32	flags;
+#define VFIO_DEVICE_DETACH_PASID	(1 << 0)
+	__u32	pasid;
+};
+
+#define VFIO_DEVICE_DETACH_IOMMUFD_PT		_IO(VFIO_TYPE, VFIO_BASE + 20)
+
+static int vfio_device_attach_iommufd_pt_ioctl(int cdev_fd, unsigned int pt_id)
+{
+	struct vfio_device_attach_iommufd_pt attach_args = {
+		.argsz = sizeof(attach_args),
+		.pt_id = pt_id,
+	};
+
+	return ioctl(cdev_fd, VFIO_DEVICE_ATTACH_IOMMUFD_PT, &attach_args);
+}
+static int vfio_device_detach_iommufd_pt_ioctl(int cdev_fd)
+{
+	struct vfio_device_detach_iommufd_pt detach_args = {
+		.argsz = sizeof(detach_args),
+	};
+
+	return ioctl(cdev_fd, VFIO_DEVICE_DETACH_IOMMUFD_PT, &detach_args);
 }
 
 int iommufd_noiommu_test(const char *bdf)
@@ -831,12 +901,14 @@ int iommufd_noiommu_test(const char *bdf)
 	printf("IOAS id %d\n", ioas_id);
 
 	iommufd_bind(__iommufd, devfd);
-	ioas_destroy(__iommufd, ioas_id);
-
+	//ioas_destroy(__iommufd, ioas_id);
+	vfio_device_attach_iommufd_pt_ioctl(devfd, ioas_id);
+	vfio_device_detach_iommufd_pt_ioctl(devfd);
 	device_reset(devfd);
 
-	ioas_alloc(__iommufd);
+	//ioas_alloc(__iommufd);
 
+	iommufd_ioas_map(__iommufd, ioas_id, 0x1000, 0x1000, 0x1000);
 	vfio_test_hot_reset(devfd);
 	vfio_test_device_info(devfd);
 
