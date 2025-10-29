@@ -806,22 +806,24 @@ void device_reset(int devfd)
 	    printf("reset device successfully\n");
 }
 
-static void iommufd_ioas_map(int iommufd, int ioas_id, uint64_t iova, uint64_t paddr, uint64_t size)
+static void iommufd_ioas_map(int iommufd, int ioas_id, uint64_t iova,
+							 uint64_t uvaddr, uint64_t size)
 {
 	struct iommu_ioas_map map = {
 		.size = sizeof(map),
 		.flags = IOMMU_IOAS_MAP_READABLE,
 		.ioas_id = ioas_id,
 		.iova = iova,
-		.user_va = paddr,
+		.user_va = uvaddr,
 		.length = size,
 	};
 
 	if (ioctl(iommufd, IOMMU_IOAS_MAP, &map) != 0) {
 		perror("IOMMU_IOAS_MAP");
+		return;
 	}
 	printf("Successfully mapped iommufd %d IOAS %d IOVA 0x%lx to VA 0x%lx size 0x%lx\n",
-	       iommufd, ioas_id, (unsigned long)iova, (unsigned long)paddr,
+	       iommufd, ioas_id, (unsigned long)iova, (unsigned long)uvaddr,
 	       (unsigned long)size);
 }
 
@@ -867,6 +869,7 @@ int iommufd_noiommu_test(const char *bdf)
 	char *path = NULL;
 	int devfd;
 	int ioas_id;
+	uint64_t uvaddr;
 
 	struct vfio_device_bind_iommufd bind = {
 		.argsz = sizeof(bind),
@@ -902,13 +905,28 @@ int iommufd_noiommu_test(const char *bdf)
 
 	iommufd_bind(__iommufd, devfd);
 	//ioas_destroy(__iommufd, ioas_id);
-	vfio_device_attach_iommufd_pt_ioctl(devfd, ioas_id);
-	vfio_device_detach_iommufd_pt_ioctl(devfd);
+	if (vfio_device_attach_iommufd_pt_ioctl(devfd, ioas_id)) {
+		printf("Failed to attach pt to device\n");
+		return -1;
+	}
+	printf("Successfully attached PT to device\n");
+
+	uvaddr = (uint64_t)mmap(NULL, 0x2000, PROT_READ | PROT_WRITE,
+				MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (uvaddr == (uint64_t)MAP_FAILED) {
+		printf("mmap failed\n");
+		return -1;
+	}
+	printf("Allocated user VA at 0x%lx\n", (unsigned long)uvaddr);
+	iommufd_ioas_map(__iommufd, ioas_id, 0x10000, uvaddr, 0x10000);
+	if (vfio_device_detach_iommufd_pt_ioctl(devfd)) {
+		printf("Failed to detach pt from device\n");
+		return -1;
+	}
+	printf("Successfully detached PT from device\n");
+
 	device_reset(devfd);
 
-	//ioas_alloc(__iommufd);
-
-	iommufd_ioas_map(__iommufd, ioas_id, 0x1000, 0x1000, 0x1000);
 	vfio_test_hot_reset(devfd);
 	vfio_test_device_info(devfd);
 
