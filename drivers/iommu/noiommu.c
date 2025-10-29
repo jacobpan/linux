@@ -79,6 +79,8 @@ noiommu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 {
 	struct noiommu_domain *noiommu_dom;
 
+	dev_alert(dev, "%s Allocating No-IOMMU domain\n", __func__);
+
 	if (user_data)
 		return ERR_PTR(-EOPNOTSUPP);
 
@@ -90,6 +92,7 @@ noiommu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 	noiommu_dom->domain.geometry.aperture_end = NOIOMMU_APERTURE_LAST;
 	noiommu_dom->domain.pgsize_bitmap = NOIOMMU_IO_PAGE_SIZE;
 
+	noiommu_dom->domain.ops = noiommu_ops.default_domain_ops;
 	noiommu_dom->domain.type = IOMMU_DOMAIN_UNMANAGED;
 	xa_init(&noiommu_dom->pfns);
 
