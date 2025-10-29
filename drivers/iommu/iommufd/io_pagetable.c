@@ -251,7 +251,7 @@ static struct iopt_area *iopt_area_alloc(void)
 	return area;
 }
 
-static int iopt_alloc_area_pages(struct io_pagetable *iopt,
+static noinline int iopt_alloc_area_pages(struct io_pagetable *iopt,
 				 struct list_head *pages_list,
 				 unsigned long length, unsigned long *dst_iova,
 				 int iommu_prot, unsigned int flags)
