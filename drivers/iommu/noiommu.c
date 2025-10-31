@@ -212,6 +212,11 @@ struct notifier_block noiommu_bus_nb = {
 	/* data */
 };
 
+static int iommu_noiommu_dev_add(struct device *dev, struct iommu_device *iommu)
+{
+	return iommu_fwspec_init(dev, iommu->fwnode);
+}
+
 static int __init noiommu_init(void)
 {
 	struct pci_dev *pdev = NULL;
@@ -225,6 +230,10 @@ static int __init noiommu_init(void)
 		return -ENODEV;
 
 	for_each_pci_dev(pdev) {
+		if (iommu_noiommu_dev_add(&pdev->dev, &noiommu_dev.iommu)) {
+			dev_err(&pdev->dev, "Failed to add no-IOMMU fwspec \n");
+			continue;
+		}
 		iommu_probe_device(&pdev->dev);
 		dev_dbg(&pdev->dev, "Probed PCI device for no IOMMU\n");
 	}

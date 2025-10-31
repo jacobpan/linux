@@ -285,6 +285,7 @@ EXPORT_SYMBOL_GPL(iommu_device_register);
 
 void iommu_device_unregister(struct iommu_device *iommu)
 {
+	pr_alert("Unregistering IOMMU device %p\n", iommu);
 	for (int i = 0; i < ARRAY_SIZE(iommu_buses); i++)
 		bus_for_each_dev(iommu_buses[i], NULL, iommu, remove_iommu_group);
 
@@ -339,6 +340,7 @@ int iommu_device_register_bus(struct iommu_device *iommu,
 
 	err = bus_iommu_probe(bus);
 	if (err) {
+		pr_alert("IOMMU device register bus failed\n");
 		iommu_device_unregister_bus(iommu, bus, nb);
 		return err;
 	}
@@ -364,7 +366,6 @@ int iommu_mock_device_add(struct device *dev, struct iommu_device *iommu)
 	return rc;
 }
 EXPORT_SYMBOL_GPL(iommu_mock_device_add);
-#endif
 
 static struct dev_iommu *dev_iommu_get(struct device *dev)
 {
@@ -459,8 +460,10 @@ static int iommu_init_device(struct device *dev)
 		dev->bus->dma_configure(dev);
 		mutex_lock(&iommu_probe_device_lock);
 		/* If another instance finished the job for us, skip it */
-		if (!dev->iommu || dev->iommu_group)
+		if (!dev->iommu || dev->iommu_group) {
+			dev_dbg(dev, "IOMMU already configured by dma_configure\n");
 			return -ENODEV;
+		}
 	}
 	// TODO: noiommu driver is conflicting with selttest driver. they should
 	// be enable to coexist
@@ -473,6 +476,7 @@ static int iommu_init_device(struct device *dev)
 	 */
 	ops = iommu_fwspec_ops(dev->iommu->fwspec);
 	if (!ops) {
+		dev_dbg(dev, "No IOMMU ops found for device\n");
 		ret = -ENODEV;
 		goto err_free;
 	}
