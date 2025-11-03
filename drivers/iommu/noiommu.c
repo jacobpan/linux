@@ -7,6 +7,7 @@
 #include <linux/pci.h>
 #include <linux/slab.h>
 #include <linux/types.h>
+#include <linux/generic_pt/iommu.h>
 
 #include "iommu-priv.h"
 
@@ -16,7 +17,11 @@ struct noiommu_dev {
 };
 
 struct noiommu_domain {
-	struct iommu_domain		domain;
+	union {
+		struct iommu_domain domain;
+		struct pt_iommu iommu;
+		struct pt_iommu_amdv1 amdv1;
+	};
 	struct xarray pfns;
 };
 
@@ -68,26 +73,55 @@ static int noiommu_attach_dev(struct iommu_domain *domain, struct device *dev)
 	return 0;
 }
 
+static void noiommu_domain_free(struct iommu_domain *domain)
+{
+	kfree(domain);
+}
+
 enum {
 	NOIOMMU_IO_PAGE_SIZE = PAGE_SIZE / 2,
 	NOIOMMU_APERTURE_START = 1UL << 24,
 	NOIOMMU_APERTURE_LAST = (1UL << 31) - 1,
 };
+
+static const struct iommu_domain_ops amdv1_ops = {
+	IOMMU_PT_DOMAIN_OPS(amdv1),
+	.free = noiommu_domain_free,
+	.attach_dev = noiommu_attach_dev,
+//	.iotlb_sync = &noiommu_iotlb_sync,
+};
+
 static struct iommu_domain *
 noiommu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 			       const struct iommu_user_data *user_data)
 {
 	struct noiommu_domain *noiommu_dom;
+	struct pt_iommu_amdv1_cfg cfg = {};
+	int rc;
 
 	dev_alert(dev, "%s Allocating No-IOMMU domain\n", __func__);
 
 	if (user_data)
 		return ERR_PTR(-EOPNOTSUPP);
+	cfg.common.hw_max_vasz_lg2 = 64;
+	cfg.common.hw_max_oasz_lg2 = 52;
+	cfg.common.features = BIT(PT_FEAT_AMDV1_FORCE_COHERENCE);
+	cfg.starting_level = 2;
 
 	noiommu_dom = kzalloc(sizeof(*noiommu_dom), GFP_KERNEL);
 	if (!noiommu_dom)
 		return ERR_PTR(-ENOMEM);
 
+	noiommu_dom->amdv1.iommu.nid = NUMA_NO_NODE;
+	noiommu_dom->domain.ops = &amdv1_ops;
+	dev_alert(dev, "%s Initializing No-IOMMU AMDV1 pagetable\n", __func__);
+	rc = pt_iommu_noiommu_init(&noiommu_dom->amdv1, &cfg, GFP_KERNEL);
+	if (rc) {
+		kfree(noiommu_dom);
+		return ERR_PTR(rc);
+	}
+
+#if 0
 	noiommu_dom->domain.geometry.aperture_start = NOIOMMU_APERTURE_START;
 	noiommu_dom->domain.geometry.aperture_end = NOIOMMU_APERTURE_LAST;
 	noiommu_dom->domain.pgsize_bitmap = NOIOMMU_IO_PAGE_SIZE;
@@ -95,13 +129,8 @@ noiommu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 	noiommu_dom->domain.ops = noiommu_ops.default_domain_ops;
 	noiommu_dom->domain.type = IOMMU_DOMAIN_UNMANAGED;
 	xa_init(&noiommu_dom->pfns);
-
+#endif
 	return &noiommu_dom->domain;
-}
-
-static void noiommu_domain_free(struct iommu_domain *domain)
-{
-	kfree(domain);
 }
 
 static int noiommu_map_pages(struct iommu_domain *domain, unsigned long iova,
