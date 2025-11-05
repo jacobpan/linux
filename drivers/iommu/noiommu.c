@@ -115,7 +115,7 @@ noiommu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 	noiommu_dom->amdv1.iommu.nid = NUMA_NO_NODE;
 	noiommu_dom->domain.ops = &amdv1_ops;
 	dev_alert(dev, "%s Initializing No-IOMMU AMDV1 pagetable\n", __func__);
-	rc = pt_iommu_noiommu_init(&noiommu_dom->amdv1, &cfg, GFP_KERNEL);
+	rc = pt_iommu_amdv1_noiommu_init(&noiommu_dom->amdv1, &cfg, GFP_KERNEL);
 	if (rc) {
 		kfree(noiommu_dom);
 		return ERR_PTR(rc);
