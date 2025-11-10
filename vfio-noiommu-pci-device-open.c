@@ -487,6 +487,14 @@ struct iommu_ioas_map {
 };
 #define IOMMU_IOAS_MAP _IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_MAP)
 
+struct iommu_ioas_unmap {
+	__u32 size;
+	__u32 ioas_id;
+	__aligned_u64 iova;
+	__aligned_u64 length;
+};
+#define IOMMU_IOAS_UNMAP _IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_UNMAP)
+
 #endif /* _UAPIVFIO_H */
 
 #include <errno.h>
@@ -811,7 +819,7 @@ static void iommufd_ioas_map(int iommufd, int ioas_id, uint64_t iova,
 {
 	struct iommu_ioas_map map = {
 		.size = sizeof(map),
-		.flags = IOMMU_IOAS_MAP_READABLE,
+		.flags = IOMMU_IOAS_MAP_READABLE | IOMMU_IOAS_MAP_FIXED_IOVA,
 		.ioas_id = ioas_id,
 		.iova = iova,
 		.user_va = uvaddr,
@@ -824,6 +832,25 @@ static void iommufd_ioas_map(int iommufd, int ioas_id, uint64_t iova,
 	}
 	printf("Successfully mapped iommufd %d IOAS %d IOVA 0x%lx to VA 0x%lx size 0x%lx\n",
 	       iommufd, ioas_id, (unsigned long)iova, (unsigned long)uvaddr,
+	       (unsigned long)size);
+}
+
+static void iommufd_ioas_unmap(int iommufd, int ioas_id, uint64_t iova,
+							   uint64_t size)
+{
+	struct iommu_ioas_unmap args = {
+		.size = sizeof(args),
+		.iova = iova,
+		.length = size,
+		.ioas_id = ioas_id,
+	};
+
+	if (ioctl(iommufd, IOMMU_IOAS_UNMAP, &args) != 0) {
+		perror("IOMMU_IOAS_UNMAP");
+		return;
+	}
+	printf("Successfully unmapped iommufd %d IOAS %d IOVA 0x%lx size 0x%lx\n",
+	       iommufd, ioas_id, (unsigned long)iova,
 	       (unsigned long)size);
 }
 
@@ -863,13 +890,64 @@ static int vfio_device_detach_iommufd_pt_ioctl(int cdev_fd)
 	return ioctl(cdev_fd, VFIO_DEVICE_DETACH_IOMMUFD_PT, &detach_args);
 }
 
+static int ioas_map_test_mmap(int iommufd, int ioas_id)
+{
+	uint64_t uvaddr;
+	int len = 0x10000;
+
+	uvaddr = (uint64_t)mmap(NULL, len, PROT_READ | PROT_WRITE,
+				MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (uvaddr == (uint64_t)MAP_FAILED) {
+		printf("mmap failed\n");
+		return -1;
+	}
+	printf("mmap: Allocated user VA at 0x%lx\n", (unsigned long)uvaddr);
+	iommufd_ioas_map(iommufd, ioas_id, 0xffff0000, uvaddr, len);
+	iommufd_ioas_unmap(iommufd, ioas_id, 0xffff0000, len);
+	munmap((void *)uvaddr, 0x2000);
+	return 0;
+}
+
+#if 0
+static int ioas_map_test_memfd(int iommufd, int ioas_id)
+{
+	int memfd;
+	void *uvaddr;
+
+	memfd = memfd_create("iommufd_test_memfd", MFD_CLOEXEC);
+	if (memfd < 0) {
+		printf("memfd_create failed\n");
+		return -1;
+	}
+
+	if (ftruncate(memfd, 0x2000) != 0) {
+		printf("ftruncate failed\n");
+		close(memfd);
+		return -1;
+	}
+
+	uvaddr = mmap(NULL, 0x2000, PROT_READ | PROT_WRITE,
+				MAP_SHARED, memfd, 0);
+	if (uvaddr == MAP_FAILED) {
+		printf("mmap failed\n");
+		close(memfd);
+		return -1;
+	}
+	printf("memfd: Allocated user VA at %p\n", uvaddr);
+	iommufd_ioas_map(iommufd, ioas_id, 0x30000, (uint64_t)uvaddr, 0x10000);
+	iommufd_ioas_unmap(iommufd, ioas_id, 0x30000, 0x10000);
+	munmap(uvaddr, 0x2000);
+	close(memfd);
+	return 0;
+}
+#endif
+
 int iommufd_noiommu_test(const char *bdf)
 {
 	char *vfio_id = NULL;
 	char *path = NULL;
 	int devfd;
 	int ioas_id;
-	uint64_t uvaddr;
 
 	struct vfio_device_bind_iommufd bind = {
 		.argsz = sizeof(bind),
@@ -911,16 +989,11 @@ int iommufd_noiommu_test(const char *bdf)
 	}
 	printf("Successfully attached PT to device\n");
 
-	uvaddr = (uint64_t)mmap(NULL, 0x2000, PROT_READ | PROT_WRITE,
-				MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	if (uvaddr == (uint64_t)MAP_FAILED) {
-		printf("mmap failed\n");
-		return -1;
-	}
-	printf("Allocated user VA at 0x%lx\n", (unsigned long)uvaddr);
-	iommufd_ioas_map(__iommufd, ioas_id, 0x10000, uvaddr, 0x10000);
+	ioas_map_test_mmap(__iommufd, ioas_id);
+//	ioas_map_test_memfd(__iommufd, ioas_id);
+
 	if (vfio_device_detach_iommufd_pt_ioctl(devfd)) {
-		printf("Failed to detach pt from device\n");
+		printf("Failed to detach PT from device\n");
 		return -1;
 	}
 	printf("Successfully detached PT from device\n");
