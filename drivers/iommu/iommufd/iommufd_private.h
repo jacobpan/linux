@@ -118,7 +118,7 @@ int iopt_unmap_iova(struct io_pagetable *iopt, unsigned long iova,
 		    unsigned long length, unsigned long *unmapped);
 int iopt_unmap_all(struct io_pagetable *iopt, unsigned long *unmapped);
 int iopt_get_pa(struct io_pagetable *iopt, unsigned long iova,
-			unsigned long *paddr);
+			unsigned long *paddr, unsigned long length);
 
 int iopt_read_and_clear_dirty_data(struct io_pagetable *iopt,
 				   struct iommu_domain *domain,

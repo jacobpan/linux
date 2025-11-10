@@ -814,12 +814,22 @@ int iopt_unmap_iova(struct io_pagetable *iopt, unsigned long iova,
 }
 
 int iopt_get_pa(struct io_pagetable *iopt, unsigned long iova,
-			unsigned long *paddr)
+			unsigned long *paddr, unsigned long length)
 {
 	struct iopt_area *area;
 	unsigned long area_iova;
 	unsigned long offset;
 
+	if (check_add_overflow(iova, length - 1, &area_iova))
+		return -EOVERFLOW;
+
+	/*
+	 * TODO:
+	 * 1. limit to noiommu device attached domains
+	 * 2. return page size aligned physical addresses only
+	 * 3. support length < page size since noiommu cannot guarantee
+	 *    contiguous physical memory
+	 */
 	down_read(&iopt->iova_rwsem);
 	area = iopt_area_iter_first(iopt, iova, iova);
 	if (!area || !area->pages) {

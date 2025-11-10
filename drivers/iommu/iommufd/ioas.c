@@ -394,7 +394,7 @@ int iommufd_ioas_get_pa(struct iommufd_ucmd *ucmd)
 	if (IS_ERR(ioas))
 		return PTR_ERR(ioas);
 
-	rc = iopt_get_pa(&ioas->iopt, cmd->iova, (unsigned long *)&phys);
+	rc = iopt_get_pa(&ioas->iopt, cmd->iova, (unsigned long *)&phys, cmd->length);
 	if (rc) {
 		pr_err("%s: Failed to get PA for IOVA 0x%llx length 0x%llx: %d\n",
 		       __func__, cmd->iova, cmd->length, rc);
