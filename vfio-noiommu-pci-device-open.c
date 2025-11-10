@@ -926,7 +926,7 @@ static int iommufd_ioas_test_get_pa(int iommufd, int ioas_id, uint64_t iova,
 static int ioas_map_test_mmap(int iommufd, int ioas_id)
 {
 	uint64_t uvaddr;
-	int len = 0x10000;
+	int len = 0x10000 * 4; // 4 pages of 64k
 
 	uvaddr = (uint64_t)mmap(NULL, len, PROT_READ | PROT_WRITE,
 				MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -936,7 +936,11 @@ static int ioas_map_test_mmap(int iommufd, int ioas_id)
 	}
 	printf("mmap: Allocated user VA at 0x%lx\n", (unsigned long)uvaddr);
 	iommufd_ioas_map(iommufd, ioas_id, 0xffff0000, uvaddr, len);
-	iommufd_ioas_test_get_pa(iommufd, ioas_id, 0xffff0000, len);
+	iommufd_ioas_test_get_pa(iommufd, ioas_id, 0xffff0000L, len);
+	iommufd_ioas_test_get_pa(iommufd, ioas_id, 0xffff0000L + 0x10000, len);
+	iommufd_ioas_test_get_pa(iommufd, ioas_id, 0xffff0000L + 0x20000, len);
+	iommufd_ioas_test_get_pa(iommufd, ioas_id, 0xffff0000L + 0x30000, len);
+
 	iommufd_ioas_unmap(iommufd, ioas_id, 0xffff0000, len);
 	munmap((void *)uvaddr, 0x2000);
 	return 0;
