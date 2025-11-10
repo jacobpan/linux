@@ -44,6 +44,7 @@ enum {
 	IOMMUFD_CMD_VIOMMU_ALLOC = 0x90,
 	IOMMUFD_CMD_VDEVICE_ALLOC = 0x91,
 	IOMMUFD_CMD_IOAS_CHANGE_PROCESS = 0x92,
+	IOMMUFD_CMD_IOAS_GET_PA = 0x95,
 };
 
 /* Kernel & User level defines for VFIO IOCTLs. */
@@ -494,6 +495,16 @@ struct iommu_ioas_unmap {
 	__aligned_u64 length;
 };
 #define IOMMU_IOAS_UNMAP _IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_UNMAP)
+struct iommu_ioas_get_pa {
+	__u32 size;
+	__u32 flags;
+	__u32 ioas_id;
+	__u32 __reserved;
+	__aligned_u64 iova;
+	__aligned_u64 length;
+	__aligned_u64 phys;
+};
+#define IOMMU_IOAS_GET_PA _IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_GET_PA)
 
 #endif /* _UAPIVFIO_H */
 
@@ -890,6 +901,28 @@ static int vfio_device_detach_iommufd_pt_ioctl(int cdev_fd)
 	return ioctl(cdev_fd, VFIO_DEVICE_DETACH_IOMMUFD_PT, &detach_args);
 }
 
+static int iommufd_ioas_test_get_pa(int iommufd, int ioas_id, uint64_t iova,
+									uint64_t length)
+{
+	struct iommu_ioas_get_pa get_pa = {
+		.size = sizeof(get_pa),
+		.flags = 0,
+		.ioas_id = ioas_id,
+		.iova = iova,
+		.length = length,
+		.phys = 0,
+	};
+
+	if (ioctl(iommufd, IOMMU_IOAS_GET_PA, &get_pa) != 0) {
+		perror("IOMMU_IOAS_GET_PA");
+		return -1;
+	}
+	printf("Successfully got PA 0x%lx for IOVA 0x%lx\n",
+	       (unsigned long)get_pa.phys, (unsigned long)iova);
+
+	return 0;
+}
+
 static int ioas_map_test_mmap(int iommufd, int ioas_id)
 {
 	uint64_t uvaddr;
@@ -903,6 +936,7 @@ static int ioas_map_test_mmap(int iommufd, int ioas_id)
 	}
 	printf("mmap: Allocated user VA at 0x%lx\n", (unsigned long)uvaddr);
 	iommufd_ioas_map(iommufd, ioas_id, 0xffff0000, uvaddr, len);
+	iommufd_ioas_test_get_pa(iommufd, ioas_id, 0xffff0000, len);
 	iommufd_ioas_unmap(iommufd, ioas_id, 0xffff0000, len);
 	munmap((void *)uvaddr, 0x2000);
 	return 0;

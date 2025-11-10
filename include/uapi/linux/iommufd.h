@@ -57,6 +57,7 @@ enum {
 	IOMMUFD_CMD_IOAS_CHANGE_PROCESS = 0x92,
 	IOMMUFD_CMD_VEVENTQ_ALLOC = 0x93,
 	IOMMUFD_CMD_HW_QUEUE_ALLOC = 0x94,
+	IOMMUFD_CMD_IOAS_GET_PA = 0x95,
 };
 
 /**
@@ -219,16 +220,16 @@ struct iommu_ioas_map {
 };
 #define IOMMU_IOAS_MAP _IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_MAP)
 
-struct iommu_ioas_map_noiommu {
+struct iommu_ioas_get_pa {
 	__u32 size;
 	__u32 flags;
 	__u32 ioas_id;
 	__u32 __reserved;
-	__aligned_u64 user_va;
-	__aligned_u64 length;
 	__aligned_u64 iova;
+	__aligned_u64 length;
+	__aligned_u64 phys;
 };
-#define IOMMU_IOAS_MAP_NOIOMMU _IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_MAP_NOIOMMU)
+#define IOMMU_IOAS_GET_PA _IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_GET_PA)
 
 /**
  * struct iommu_ioas_map_file - ioctl(IOMMU_IOAS_MAP_FILE)

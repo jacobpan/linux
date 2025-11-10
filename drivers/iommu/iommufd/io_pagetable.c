@@ -813,6 +813,36 @@ int iopt_unmap_iova(struct io_pagetable *iopt, unsigned long iova,
 	return iopt_unmap_iova_range(iopt, iova, iova_last, unmapped);
 }
 
+int iopt_get_pa(struct io_pagetable *iopt, unsigned long iova,
+			unsigned long *paddr)
+{
+	struct iopt_area *area;
+	unsigned long area_iova;
+	unsigned long offset;
+
+	down_read(&iopt->iova_rwsem);
+	area = iopt_area_iter_first(iopt, iova, iova);
+	if (!area || !area->pages) {
+		pr_alert("iopt_get_pa: No area for iova 0x%lx\n", iova);
+		up_read(&iopt->iova_rwsem);
+		return -ENOENT;
+	}
+
+	if (!area->storage_domain) {
+		pr_alert("iopt_get_pa: area has no storage_domain\n");
+		up_read(&iopt->iova_rwsem);
+		return -EINVAL;
+	}
+
+	area_iova = iopt_area_iova(area);
+	pr_alert("iopt_get_pa: area_iova=0x%lx iova=0x%lx\n",
+			area_iova, iova);
+	offset = iova - area_iova;
+	*paddr = iommu_iova_to_phys(area->storage_domain, iova);
+	up_read(&iopt->iova_rwsem);
+	return 0;
+}
+
 int iopt_unmap_all(struct io_pagetable *iopt, unsigned long *unmapped)
 {
 	int rc;
