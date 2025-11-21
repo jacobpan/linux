@@ -359,6 +359,31 @@ config HYPERV_IOMMU
 	  Stub IOMMU driver to handle IRQs to support Hyper-V Linux
 	  guest and root partitions.
 
+config NOIOMMU_MODE_IOMMU
+	bool "Dummy IOMMU driver to support noiommu mode for IOMMUFD"
+	depends on PCI
+	depends on VFIO_NOIOMMU && VFIO_DEVICE_CDEV
+	depends on IOMMUFD_DRIVER
+	depends on IOMMU_PT
+	depends on GENERIC_PT
+	depends on IOMMU_PT_AMDV1
+	select IOMMU_API
+	help
+	  This option introduces a dummy IOMMU driver that enables VFIO cdevs
+	  to operate under no-IOMMU mode using IOMMUFD. Similar to VFIO’s
+	  existing no-IOMMU mode, this requires userspace to set the
+	  enable_unsafe_noiommu module parameter, allowing DMA only with physical
+	  addresses. Unlike the traditional VFIO no-IOMMU mode, this option
+	  supports IOMMUFD IOAS UAPIs such as map and unmap by leveraging mock
+	  page tables provided by the generic IOMMU page table layer. The IOVAs
+	  exposed to userspace are not used for DMA; instead, they serve as keys
+	  to retrieve corresponding physical addresses from these mock tables.
+	  Memory pinning is still performed to ensure that physical pages remain
+	  resident during DMA operations.
+	  VFIO group based No-IOMMU mode is mutually exclusive with this option.
+
+	  If unsure, say N here.
+
 config VIRTIO_IOMMU
 	tristate "Virtio IOMMU driver"
 	depends on VIRTIO
