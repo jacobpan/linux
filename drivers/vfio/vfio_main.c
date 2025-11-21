@@ -321,8 +321,9 @@ static int __vfio_register_dev(struct vfio_device *device,
 	if (WARN_ON(IS_ENABLED(CONFIG_IOMMUFD) &&
 		    (!device->ops->bind_iommufd ||
 		     !device->ops->unbind_iommufd ||
-		     !device->ops->attach_ioas ||
-		     !device->ops->detach_ioas)))
+		     (!IS_ENABLED(CONFIG_NOIOMMU_MODE_IOMMU) &&
+		      (!device->ops->attach_ioas ||
+		       !device->ops->detach_ioas)))))
 		return -EINVAL;
 
 	/*
