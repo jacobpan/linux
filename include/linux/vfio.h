@@ -71,6 +71,7 @@ struct vfio_device {
 	u8 iommufd_attached:1;
 #endif
 	u8 cdev_opened:1;
+	u8 noiommu:1;
 #ifdef CONFIG_DEBUG_FS
 	/*
 	 * debug_root is a static property of the vfio_device
@@ -331,6 +332,7 @@ static inline bool vfio_file_has_dev(struct file *file, struct vfio_device *devi
 	return false;
 }
 #endif
+bool vfio_noiommu_enabled(void);
 bool vfio_file_is_valid(struct file *file);
 bool vfio_file_enforced_coherent(struct file *file);
 void vfio_file_set_kvm(struct file *file, struct kvm *kvm);

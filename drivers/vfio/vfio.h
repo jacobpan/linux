@@ -118,6 +118,19 @@ static inline bool vfio_device_is_noiommu(struct vfio_device *vdev)
 	return IS_ENABLED(CONFIG_VFIO_NOIOMMU) &&
 	       vdev->group->type == VFIO_NO_IOMMU;
 }
+
+static inline bool vfio_cdev_is_noiommu(struct vfio_device *vdev)
+{
+	return IS_ENABLED(CONFIG_NOIOMMU_MODE_IOMMU) && vfio_noiommu_enabled();
+}
+
+static inline int vfio_device_set_no_iommu(struct vfio_device *vdev)
+{
+	if (vfio_device_is_noiommu(vdev) || vfio_cdev_is_noiommu(vdev))
+		vdev->noiommu = true;
+
+	return 0;
+}
 #else
 struct vfio_group;
 
@@ -192,6 +205,25 @@ static inline void vfio_group_cleanup(void)
 static inline bool vfio_device_is_noiommu(struct vfio_device *vdev)
 {
 	return false;
+}
+
+static inline int vfio_device_set_no_iommu(struct vfio_device *vdev)
+{
+	struct iommu_group *iommu_group;
+
+	/* Do not support group device noiommu mode simultaneously */
+	if (iommu_group_get(vdev->dev)) {
+		vdev->noiommu = false;
+		iommu_group_put(iommu_group);
+		return -EINVAL;
+	}
+
+	if (!IS_ENABLED(CONFIG_VFIO_NOIOMMU) || !vfio_noiommu)
+		return -EINVAL;
+
+	vdev->noiommu = true;
+
+	return 0;
 }
 #endif /* CONFIG_VFIO_GROUP */
 
@@ -359,7 +391,11 @@ void vfio_init_device_cdev(struct vfio_device *device);
 
 static inline int vfio_device_add(struct vfio_device *device)
 {
-	/* cdev does not support noiommu device */
+	/*
+	 * cdev does not support noiommu device for VFIO_NOIOMMU group type.
+	 * However, under IOMMUFD with dummy iommu driver, noiommu mode is
+	 * also supported for cdev devices.
+	 */
 	if (vfio_device_is_noiommu(device))
 		return device_add(&device->device);
 	vfio_init_device_cdev(device);

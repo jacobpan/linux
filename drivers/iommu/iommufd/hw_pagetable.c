@@ -345,6 +345,14 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	struct iommufd_device *idev;
 	int rc;
 
+	/*
+	 * For devices operating in no-IOMMU mode, permit only the automatic
+	 * domain HWPT where auto domain uses generic iommupt to provide mock
+	 * page tables.
+	 */
+	if (ucmd->ictx->no_iommu_mode)
+		return -EOPNOTSUPP;
+
 	if (cmd->__reserved)
 		return -EOPNOTSUPP;
 	if ((cmd->data_type == IOMMU_HWPT_DATA_NONE && cmd->data_len) ||
