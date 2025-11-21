@@ -298,7 +298,6 @@ void iommu_device_unregister(struct iommu_device *iommu)
 }
 EXPORT_SYMBOL_GPL(iommu_device_unregister);
 
-#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
 void iommu_device_unregister_bus(struct iommu_device *iommu,
 				 const struct bus_type *bus,
 				 struct notifier_block *nb)
@@ -347,6 +346,7 @@ int iommu_device_register_bus(struct iommu_device *iommu,
 }
 EXPORT_SYMBOL_GPL(iommu_device_register_bus);
 
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
 int iommu_mock_device_add(struct device *dev, struct iommu_device *iommu)
 {
 	int rc;
