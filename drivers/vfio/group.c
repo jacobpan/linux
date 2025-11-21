@@ -134,7 +134,7 @@ static int vfio_group_ioctl_set_container(struct vfio_group *group,
 	if (!IS_ERR(iommufd)) {
 		if (IS_ENABLED(CONFIG_VFIO_NOIOMMU) &&
 		    group->type == VFIO_NO_IOMMU)
-			ret = iommufd_vfio_compat_set_no_iommu(iommufd);
+			ret = iommufd_vfio_set_no_iommu(iommufd);
 		else
 			ret = iommufd_vfio_compat_ioas_create(iommufd);
 
