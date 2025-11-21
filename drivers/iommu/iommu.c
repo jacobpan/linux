@@ -2895,6 +2895,16 @@ static const struct iommu_device *iommu_from_fwnode(const struct fwnode_handle *
 	return ret;
 }
 
+bool iommu_is_registered(void)
+{
+	bool registered;
+
+	spin_lock(&iommu_device_lock);
+	registered = !list_empty(&iommu_device_list);
+	spin_unlock(&iommu_device_lock);
+	return registered;
+}
+
 const struct iommu_ops *iommu_ops_from_fwnode(const struct fwnode_handle *fwnode)
 {
 	const struct iommu_device *iommu = iommu_from_fwnode(fwnode);
