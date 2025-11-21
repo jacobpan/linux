@@ -275,6 +275,11 @@ struct pt_iommu_vtdss_hw_info {
 
 IOMMU_FORMAT(vtdss, vtdss_pt);
 
+#define pt_iommu_amdv1_noiommu pt_iommu_amdv1
+#define pt_iommu_amdv1_noiommu_cfg pt_iommu_amdv1_cfg
+struct pt_iommu_amdv1_noiommu_hw_info;
+IOMMU_PROTOTYPES(amdv1_noiommu);
+
 struct pt_iommu_x86_64_cfg {
 	struct pt_iommu_cfg common;
 	/* 4 is a 57 bit 5 level table */
