@@ -2,7 +2,7 @@
 /*
  * Copyright (c) 2025, Microsoft Corporation.
  */
-
+#define DEBUG
 #define pr_fmt(fmt) "NOIOMMU: " fmt
 #include <linux/device.h>
 #include <linux/iommu.h>
@@ -75,12 +75,12 @@ noiommu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 
 	if (user_data)
 		return ERR_PTR(-EOPNOTSUPP);
-
+#if 0 // no need to check, this module only loads when vfio_noiommu is enabled
 	if (vfio_noiommu_enabled() == false) {
 		pr_info("Must enable unsafe_noiommu_mode\n");
 		return ERR_PTR(-ENODEV);
 	}
-
+#endif
 	cfg.common.hw_max_vasz_lg2 = 64;
 	cfg.common.hw_max_oasz_lg2 = 52;
 	cfg.common.features = BIT(PT_FEAT_AMDV1_FORCE_COHERENCE);
@@ -158,7 +158,7 @@ static int iommu_noiommu_dev_add(struct device *dev, struct iommu_device *iommu)
 	return iommu_fwspec_init(dev, iommu->fwnode);
 }
 
-static int __init noiommu_init(void)
+int noiommu_init(void)
 {
 	struct pci_dev *pdev = NULL;
 
@@ -185,7 +185,7 @@ static int __init noiommu_init(void)
 
 	return 0;
 }
-early_initcall(noiommu_init);
+//early_initcall(noiommu_init);
 
 static void __exit noiommu_exit(void)
 {
@@ -195,10 +195,11 @@ static void __exit noiommu_exit(void)
     iommu_device_unregister(&noiommu_dev.iommu);
 
 }
-
+#if 0
 module_init(noiommu_init);
 module_exit(noiommu_exit);
 
 MODULE_DESCRIPTION("No-IOMMU driver for PCI devices without hardware IOMMU");
 MODULE_AUTHOR("Anonymous");
 MODULE_LICENSE("GPL v2");
+#endif
