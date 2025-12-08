@@ -18,6 +18,41 @@ MODULE_PARM_DESC(
 	"Allow IOMMUFD to bind to devices even if the platform cannot isolate "
 	"the MSI interrupt window. Enabling this is a security weakness.");
 
+static bool allow_unsafe_dma;
+
+static int allow_unsafe_dma_set(const char *val, const struct kernel_param *kp)
+{
+	int ret;
+	bool newv;
+
+	ret = kstrtobool(val, &newv);
+	if (ret)
+		return ret;
+	/* If set, call noiommu_init() to load dummy noiommu driver */
+	if (newv && !allow_unsafe_dma) {
+		/* Will fail if HW IOMMU is present */
+		ret = noiommu_init();
+		if (ret)
+			return ret;
+		allow_unsafe_dma = newv;
+	}
+
+	return 0;
+}
+
+static int allow_unsafe_dma_get(char *buf, const struct kernel_param *kp)
+{
+    return param_get_bool(buf, kp);
+}
+
+static const struct kernel_param_ops allow_unsafe_dma_ops = {
+    .set = allow_unsafe_dma_set,
+    .get = allow_unsafe_dma_get,
+};
+
+module_param_cb(allow_unsafe_dma, &allow_unsafe_dma_ops, &allow_unsafe_dma, 0644);
+MODULE_PARM_DESC(allow_unsafe_dma, "Enable unsafe DMA no-IOMMU mode");
+
 struct iommufd_attach {
 	struct iommufd_hw_pagetable *hwpt;
 	struct xarray device_array;

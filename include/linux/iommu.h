@@ -175,6 +175,7 @@ enum iommu_domain_cookie_type {
 	IOMMU_COOKIE_SVA,
 	IOMMU_COOKIE_IOMMUFD,
 };
+extern int noiommu_init(void);
 
 /* Domain feature flags */
 #define __IOMMU_DOMAIN_PAGING	(1U << 0)  /* Support for iommu_map/unmap */

@@ -770,6 +770,7 @@ static int __init iommufd_init(void)
 	ret = iommufd_test_init();
 	if (ret)
 		goto err_vfio_misc;
+//	noiommu_init();
 	return 0;
 
 err_vfio_misc:

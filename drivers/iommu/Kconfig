@@ -360,7 +360,7 @@ config HYPERV_IOMMU
 	  guest and root partitions.
 
 config NOIOMMU_MODE_IOMMU
-	bool "Dummy IOMMU driver to support noiommu mode for IOMMUFD"
+	tristate "Dummy IOMMU driver to support noiommu mode for IOMMUFD"
 	depends on PCI
 	depends on VFIO_NOIOMMU && VFIO_DEVICE_CDEV
 	depends on IOMMUFD_DRIVER
