@@ -124,6 +124,7 @@ static inline bool vfio_pci_device_match(struct vfio_pci_device *device,
 }
 
 const char *vfio_pci_get_cdev_path(const char *bdf);
+int vfio_pci_noiommu_mode_enabled(void);
 
 /* Low-level routines for setting up a struct vfio_pci_device */
 struct vfio_pci_device *vfio_pci_device_alloc(const char *bdf, struct iommu *iommu);
