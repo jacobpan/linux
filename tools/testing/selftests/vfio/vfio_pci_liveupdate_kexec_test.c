@@ -159,6 +159,15 @@ static void check_open_vfio_device_fails(void)
 	VFIO_ASSERT_EQ(errno, EBUSY);
 	free((void *)cdev_path);
 
+	/*
+	 * In no-IOMMU mode the group lives at /dev/vfio/noiommu-<N> and
+	 * cannot be added to a Type1 IOMMU container, so the container-based
+	 * access check below doesn't apply.  The cdev check above already
+	 * covers that the device is inaccessible in this mode.
+	 */
+	if (vfio_pci_noiommu_mode_enabled())
+		return;
+
 	for (i = 0; i < nr_iommu_modes; i++) {
 		if (!iommu_modes[i].container_path)
 			continue;

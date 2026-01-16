@@ -225,11 +225,14 @@ void vfio_pci_group_setup(struct vfio_pci_device *device)
 	struct vfio_group_status group_status = {
 		.argsz = sizeof(group_status),
 	};
-	char group_path[32];
+	char group_path[64];
 	int group;
 
 	group = vfio_pci_get_group_from_dev(device->bdf);
-	snprintf(group_path, sizeof(group_path), "/dev/vfio/%d", group);
+	if (vfio_pci_noiommu_mode_enabled())
+		snprintf(group_path, sizeof(group_path), "/dev/vfio/noiommu-%d", group);
+	else
+		snprintf(group_path, sizeof(group_path), "/dev/vfio/%d", group);
 
 	device->group_fd = open(group_path, O_RDWR);
 	VFIO_ASSERT_GE(device->group_fd, 0, "open(%s) failed\n", group_path);
@@ -294,6 +297,24 @@ static void vfio_pci_device_setup(struct vfio_pci_device *device)
 		device->msi_eventfds[i] = -1;
 }
 
+
+int vfio_pci_noiommu_mode_enabled(void)
+{
+	const char *path = "/sys/module/vfio/parameters/enable_unsafe_noiommu_mode";
+	FILE *f;
+	int c;
+
+	f = fopen(path, "re");
+	if (!f)
+		return 0;
+
+	c = fgetc(f);
+	fclose(f);
+	if (c == 'Y' || c == 'y')
+		return 1;
+	return 0;
+}
+
 const char *vfio_pci_get_cdev_path(const char *bdf)
 {
 	char dir_path[PATH_MAX];
@@ -310,8 +331,11 @@ const char *vfio_pci_get_cdev_path(const char *bdf)
 	VFIO_ASSERT_NOT_NULL(dir, "Failed to open directory %s\n", dir_path);
 
 	while ((entry = readdir(dir)) != NULL) {
-		/* Find the file that starts with "vfio" */
-		if (strncmp("vfio", entry->d_name, 4))
+		/* Find the file that starts with "noiommu-vfio" or "vfio" */
+		if (vfio_pci_noiommu_mode_enabled()) {
+			if (strncmp("noiommu-vfio", entry->d_name, strlen("noiommu-vfio")))
+				continue;
+		} else if (strncmp("vfio", entry->d_name, 4))
 			continue;
 
 		snprintf(cdev_path, PATH_MAX, "/dev/vfio/devices/%s", entry->d_name);
