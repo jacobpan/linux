@@ -20,7 +20,7 @@ include lib/libvfio.mk
 include ../liveupdate/lib/libliveupdate.mk
 
 CFLAGS += -I$(top_srcdir)/tools/include
-CFLAGS += -MD
+CFLAGS += -MD -static
 CFLAGS += $(EXTRA_CFLAGS)
 
 LDFLAGS += -pthread

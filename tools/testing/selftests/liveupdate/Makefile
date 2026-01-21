@@ -11,7 +11,7 @@ include ../lib.mk
 include lib/libliveupdate.mk
 
 CFLAGS += $(KHDR_INCLUDES)
-CFLAGS += -Wall -O2 -Wno-unused-function
+CFLAGS += -Wall -O2 -Wno-unused-function -static
 CFLAGS += -MD
 
 TEST_O := $(patsubst %, %.o, $(TEST_GEN_PROGS))
