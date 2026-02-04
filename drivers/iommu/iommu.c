@@ -33,6 +33,7 @@
 #include <trace/events/iommu.h>
 #include <linux/sched/mm.h>
 #include <linux/msi.h>
+#include <linux/vfio.h>
 #include <uapi/linux/iommufd.h>
 
 #include "dma-iommu.h"
@@ -628,8 +629,10 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 	/*
 	 * And if we do now see any replay calls, they would indicate someone
 	 * misusing the dma_configure path outside bus code.
+	 * NOIOMMU mode probe is late after driver bind since devices are added
+	 * to the dummy IOMMU device at that time.
 	 */
-	if (dev->driver)
+	if (dev->driver && !vfio_noiommu_enabled())
 		dev_WARN(dev, "late IOMMU probe at driver bind, something fishy here!\n");
 
 	group = dev->iommu_group;
