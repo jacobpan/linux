@@ -2,7 +2,7 @@
 /*
  * Copyright (c) 2025, Microsoft Corporation.
  */
-
+#define DEBUG
 #define pr_fmt(fmt) "NOIOMMU: " fmt
 #include <linux/device.h>
 #include <linux/iommu.h>
@@ -76,11 +76,6 @@ noiommu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 
 	if (user_data)
 		return ERR_PTR(-EOPNOTSUPP);
-
-	if (vfio_noiommu_enabled() == false) {
-		pr_info("Must enable unsafe_noiommu_mode\n");
-		return ERR_PTR(-ENODEV);
-	}
 
 	cfg.common.hw_max_vasz_lg2 = 64;
 	cfg.common.hw_max_oasz_lg2 = 52;
@@ -159,13 +154,13 @@ static int iommu_noiommu_dev_add(struct device *dev, struct iommu_device *iommu)
 	return iommu_fwspec_init(dev, iommu->fwnode);
 }
 
-static int __init noiommu_init(void)
+int noiommu_setup(void)
 {
-	struct pci_dev *pdev = NULL;
+	struct pci_dev *pdev = NULL; 
 
 	if (iommu_is_registered()) {
 		pr_info("IOMMU devices already registered, skipping No-IOMMU driver\n");
-		return 0;
+		return -EOPNOTSUPP;
 	}
 	pr_debug("Initializing No-IOMMU driver\n");
 	iommu_device_sysfs_add(&noiommu_dev.iommu, noiommu_dev.dev, NULL,
@@ -186,7 +181,7 @@ static int __init noiommu_init(void)
 
 	return 0;
 }
-early_initcall(noiommu_init);
+EXPORT_SYMBOL_GPL(noiommu_setup);
 
 static void __exit noiommu_exit(void)
 {
@@ -197,9 +192,8 @@ static void __exit noiommu_exit(void)
 
 }
 
-module_init(noiommu_init);
 module_exit(noiommu_exit);
-
 MODULE_DESCRIPTION("No-IOMMU driver for PCI devices without hardware IOMMU");
-MODULE_AUTHOR("Anonymous");
+MODULE_AUTHOR("Jacob Pan <jacob.pan@linux.microsoft.com>");
 MODULE_LICENSE("GPL v2");
+MODULE_IMPORT_NS("IOMMUFD");
