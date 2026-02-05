@@ -58,8 +58,34 @@ static struct vfio {
 
 #ifdef CONFIG_VFIO_NOIOMMU
 bool vfio_noiommu __read_mostly;
-module_param_named(enable_unsafe_noiommu_mode,
-		   vfio_noiommu, bool, S_IRUGO | S_IWUSR);
+static int enable_unsafe_noiommu_mode_set(const char *val,
+					    const struct kernel_param *kp)
+{
+	int ret;
+	bool newv;
+
+	ret = kstrtobool(val, &newv);
+	if (ret)
+		return ret;
+	/* If set, call noiommu_setup() to load dummy noiommu driver */
+	if (newv && !vfio_noiommu) {
+		pr_alert("setting noiommu %d\n", newv);
+		vfio_noiommu = newv;
+		ret = noiommu_setup();
+		if (ret) {
+			vfio_noiommu = false;
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+static const struct kernel_param_ops enable_unsafe_noiommu_ops = {
+    .set = enable_unsafe_noiommu_mode_set,
+    .get = param_get_bool,
+};
+module_param_cb(enable_unsafe_noiommu_mode, &enable_unsafe_noiommu_ops, &vfio_noiommu, 0644);
 MODULE_PARM_DESC(enable_unsafe_noiommu_mode, "Enable UNSAFE, no-IOMMU mode.  This mode provides no device isolation, no DMA translation, no host kernel protection, cannot be used for device assignment to virtual machines, requires RAWIO permissions, and will taint the kernel.  If you do not know what this is for, step away. (default: false)");
 bool vfio_noiommu_enabled(void)
 {
