@@ -358,6 +358,10 @@ static int __vfio_register_dev(struct vfio_device *device,
 	/* Refcounting can't start until the driver calls register */
 	refcount_set(&device->refcount, 1);
 
+	/* noiommu device w/o container may have NULL group */
+	if (!vfio_device_has_group(device))
+		return 0;
+
 	vfio_device_group_register(device);
 	vfio_device_debugfs_init(device);
 
@@ -391,6 +395,16 @@ void vfio_unregister_group_dev(struct vfio_device *device)
 	unsigned int i = 0;
 	bool interrupted = false;
 	long rc;
+
+	/*
+	 * For noiommu devices without a container, thus no dummy group,
+	 * simply delete and unregister to balance refcount.
+	 */
+	if (!vfio_device_has_group(device)) {
+		vfio_device_del(device);
+		vfio_device_put_registration(device);
+		return;
+	}
 
 	/*
 	 * Prevent new device opened by userspace via the
