@@ -128,8 +128,7 @@ static inline bool vfio_null_group_allowed(void)
 
 static inline bool vfio_device_is_noiommu(struct vfio_device *vdev)
 {
-	return IS_ENABLED(CONFIG_VFIO_NOIOMMU) &&
-	       vdev->group->type == VFIO_NO_IOMMU;
+	return IS_ENABLED(CONFIG_VFIO_NOIOMMU) && vdev->noiommu;
 }
 #else
 struct vfio_group;
