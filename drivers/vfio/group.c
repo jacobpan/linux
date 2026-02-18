@@ -390,6 +390,9 @@ int vfio_device_block_group(struct vfio_device *device)
 	struct vfio_group *group = device->group;
 	int ret = 0;
 
+	if (vfio_null_group_allowed() && !group)
+		return 0;
+
 	mutex_lock(&group->group_lock);
 	if (group->opened_file) {
 		ret = -EBUSY;
@@ -406,6 +409,9 @@ out_unlock:
 void vfio_device_unblock_group(struct vfio_device *device)
 {
 	struct vfio_group *group = device->group;
+
+	if (vfio_null_group_allowed() && !group)
+		return;
 
 	mutex_lock(&group->group_lock);
 	group->cdev_device_open_cnt--;
@@ -598,6 +604,14 @@ static struct vfio_group *vfio_noiommu_group_alloc(struct device *dev,
 	struct vfio_group *group;
 	int ret;
 
+	/*
+	 * With noiommu enabled under cdev interface only, there is no need to
+	 * create a vfio_group if the group based containers are not enabled.
+	 * The cdev interface is exclusively used for iommufd.
+	 */
+	if (vfio_null_group_allowed())
+		return NULL;
+
 	iommu_group = iommu_group_alloc();
 	if (IS_ERR(iommu_group))
 		return ERR_CAST(iommu_group);
@@ -705,6 +719,9 @@ void vfio_device_remove_group(struct vfio_device *device)
 	struct vfio_group *group = device->group;
 	struct iommu_group *iommu_group;
 
+	if (!group)
+		return;
+
 	if (group->type == VFIO_NO_IOMMU || group->type == VFIO_EMULATED_IOMMU)
 		iommu_group_remove_device(device->dev);
 
@@ -756,6 +773,9 @@ void vfio_device_group_register(struct vfio_device *device)
 
 void vfio_device_group_unregister(struct vfio_device *device)
 {
+	if (!device->group)
+		return;
+
 	mutex_lock(&device->group->device_lock);
 	list_del(&device->group_next);
 	mutex_unlock(&device->group->device_lock);
