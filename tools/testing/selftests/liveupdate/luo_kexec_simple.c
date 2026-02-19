@@ -48,8 +48,9 @@ static void run_stage_1(int luo_fd)
 static void run_stage_2(int luo_fd, int state_session_fd)
 {
 	int session_fd, mfd, stage;
+	char buf[16];
 
-	ksft_print_msg("[STAGE 2] Starting post-kexec verification...\n");
+	ksft_print_msg("[STAGE 2] JP Starting post-kexec verification...\n");
 
 	restore_and_read_stage(state_session_fd, STATE_MEMFD_TOKEN, &stage);
 	if (stage != 2)
@@ -80,6 +81,14 @@ static void run_stage_2(int luo_fd, int state_session_fd)
 	close(state_session_fd);
 
 	ksft_print_msg("\n--- SIMPLE KEXEC TEST PASSED ---\n");
+	
+	ksft_print_msg("Waiting for input...\n");
+    	fflush(stdout);
+
+	if (fgets(buf, sizeof(buf), stdin) == NULL)
+        	perror("fgets");
+
+	ksft_print_msg("\n--- SIMPLE KEXEC TEST COMPLETED ---\n");
 }
 
 int main(int argc, char *argv[])

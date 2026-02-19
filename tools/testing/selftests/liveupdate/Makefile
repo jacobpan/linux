@@ -12,7 +12,7 @@ TEST_FILES += do_kexec.sh
 include ../lib.mk
 
 CFLAGS += $(KHDR_INCLUDES)
-CFLAGS += -Wall -O2 -Wno-unused-function
+CFLAGS += -Wall -O2 -Wno-unused-function -static
 CFLAGS += -MD
 
 LIB_O := $(patsubst %.c, $(OUTPUT)/%.o, $(LIB_C))

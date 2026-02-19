@@ -14,7 +14,7 @@ include ../lib.mk
 include lib/libvfio.mk
 
 CFLAGS += -I$(top_srcdir)/tools/include
-CFLAGS += -MD
+CFLAGS += -MD -static
 CFLAGS += $(EXTRA_CFLAGS)
 
 LDFLAGS += -pthread
