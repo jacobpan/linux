@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <libgen.h>
 #include <stdint.h>
@@ -308,8 +309,9 @@ const char *vfio_pci_get_cdev_path(const char *bdf)
 	VFIO_ASSERT_NOT_NULL(dir, "Failed to open directory %s\n", dir_path);
 
 	while ((entry = readdir(dir)) != NULL) {
-		/* Find the file that starts with "vfio" */
-		if (strncmp("vfio", entry->d_name, 4))
+		/* Find the file that starts with "vfio" or "noiommu-vfio" */
+		if (strncmp("vfio", entry->d_name, 4) &&
+		    strncmp("noiommu-vfio", entry->d_name, 12))
 			continue;
 
 		snprintf(cdev_path, PATH_MAX, "/dev/vfio/devices/%s", entry->d_name);
@@ -322,24 +324,28 @@ const char *vfio_pci_get_cdev_path(const char *bdf)
 	return cdev_path;
 }
 
-static void vfio_device_bind_iommufd(int device_fd, int iommufd)
+int __vfio_device_bind_iommufd(int device_fd, int iommufd)
 {
 	struct vfio_device_bind_iommufd args = {
 		.argsz = sizeof(args),
 		.iommufd = iommufd,
 	};
 
-	ioctl_assert(device_fd, VFIO_DEVICE_BIND_IOMMUFD, &args);
+	if (ioctl(device_fd, VFIO_DEVICE_BIND_IOMMUFD, &args))
+		return -errno;
+	return 0;
 }
 
-static void vfio_device_attach_iommufd_pt(int device_fd, u32 pt_id)
+int __vfio_device_attach_iommufd_pt(int device_fd, u32 pt_id)
 {
 	struct vfio_device_attach_iommufd_pt args = {
 		.argsz = sizeof(args),
 		.pt_id = pt_id,
 	};
 
-	ioctl_assert(device_fd, VFIO_DEVICE_ATTACH_IOMMUFD_PT, &args);
+	if (ioctl(device_fd, VFIO_DEVICE_ATTACH_IOMMUFD_PT, &args))
+		return -errno;
+	return 0;
 }
 
 static void vfio_pci_iommufd_setup(struct vfio_pci_device *device, const char *bdf)

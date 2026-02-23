@@ -60,6 +60,8 @@ int __iommu_hva2iova(struct iommu *iommu, void *vaddr, iova_t *iova);
 iova_t iommu_hva2iova(struct iommu *iommu, void *vaddr);
 
 struct iommu_iova_range *iommu_iova_ranges(struct iommu *iommu, u32 *nranges);
+int __iommu_noiommu_get_pa(struct iommu *iommu, iova_t iova, u64 max_length,
+			   u64 *phys, u64 *length);
 
 #define MODE_VFIO_TYPE1_IOMMU "vfio_type1_iommu"
 #define MODE_VFIO_TYPE1V2_IOMMU "vfio_type1v2_iommu"
