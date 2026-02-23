@@ -124,6 +124,36 @@ static inline bool vfio_pci_device_match(struct vfio_pci_device *device,
 
 const char *vfio_pci_get_cdev_path(const char *bdf);
 
+int __vfio_device_bind_iommufd(int device_fd, int iommufd);
+
+static inline void vfio_device_bind_iommufd(int device_fd, int iommufd)
+{
+	VFIO_ASSERT_EQ(__vfio_device_bind_iommufd(device_fd, iommufd), 0);
+}
+
+int __vfio_device_attach_iommufd_pt(int device_fd, u32 pt_id);
+
+static inline void vfio_device_attach_iommufd_pt(int device_fd, u32 pt_id)
+{
+	VFIO_ASSERT_EQ(__vfio_device_attach_iommufd_pt(device_fd, pt_id), 0);
+}
+
+static inline bool vfio_pci_noiommu_mode_enabled(void)
+{
+	char buf[8] = {};
+	int fd, n;
+
+	fd = open("/sys/module/vfio/parameters/enable_unsafe_noiommu_mode",
+		  O_RDONLY);
+	if (fd < 0)
+		return false;
+
+	n = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+
+	return n > 0 && buf[0] == 'Y';
+}
+
 void vfio_pci_group_setup(struct vfio_pci_device *device, const char *bdf);
 void __vfio_pci_group_get_device_fd(struct vfio_pci_device *device,
 				    const char *bdf, const char *vf_token);

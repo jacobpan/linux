@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <libgen.h>
 #include <stdint.h>
@@ -352,8 +353,9 @@ const char *vfio_pci_get_cdev_path(const char *bdf)
 	VFIO_ASSERT_NOT_NULL(dir, "Failed to open directory %s\n", dir_path);
 
 	while ((entry = readdir(dir)) != NULL) {
-		/* Find the file that starts with "vfio" */
-		if (strncmp("vfio", entry->d_name, 4))
+		/* Find the file that starts with "vfio" or "noiommu-vfio" */
+		if (strncmp("vfio", entry->d_name, 4) &&
+		    strncmp("noiommu-vfio", entry->d_name, 12))
 			continue;
 
 		snprintf_assert(cdev_path, PATH_MAX, "/dev/vfio/devices/%s", entry->d_name);
@@ -366,42 +368,28 @@ const char *vfio_pci_get_cdev_path(const char *bdf)
 	return cdev_path;
 }
 
-int __vfio_device_bind_iommufd(int device_fd, int iommufd, const char *vf_token)
+int __vfio_device_bind_iommufd(int device_fd, int iommufd)
 {
 	struct vfio_device_bind_iommufd args = {
 		.argsz = sizeof(args),
 		.iommufd = iommufd,
 	};
-	uuid_t token_uuid;
-
-	if (vf_token) {
-		VFIO_ASSERT_EQ(uuid_parse(vf_token, token_uuid), 0);
-		args.flags |= VFIO_DEVICE_BIND_FLAG_TOKEN;
-		args.token_uuid_ptr = (u64)token_uuid;
-	}
 
 	if (ioctl(device_fd, VFIO_DEVICE_BIND_IOMMUFD, &args))
 		return -errno;
-
 	return 0;
 }
 
-static void vfio_device_bind_iommufd(int device_fd, int iommufd,
-				     const char *vf_token)
-{
-	int ret = __vfio_device_bind_iommufd(device_fd, iommufd, vf_token);
-
-	VFIO_ASSERT_EQ(ret, 0, "Failed VFIO_DEVICE_BIND_IOMMUFD ioctl\n");
-}
-
-static void vfio_device_attach_iommufd_pt(int device_fd, u32 pt_id)
+int __vfio_device_attach_iommufd_pt(int device_fd, u32 pt_id)
 {
 	struct vfio_device_attach_iommufd_pt args = {
 		.argsz = sizeof(args),
 		.pt_id = pt_id,
 	};
 
-	ioctl_assert(device_fd, VFIO_DEVICE_ATTACH_IOMMUFD_PT, &args);
+	if (ioctl(device_fd, VFIO_DEVICE_ATTACH_IOMMUFD_PT, &args))
+		return -errno;
+	return 0;
 }
 
 void vfio_pci_cdev_open(struct vfio_pci_device *device, const char *bdf)
