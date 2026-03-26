@@ -706,6 +706,18 @@ iommufd_get_vdevice(struct iommufd_ctx *ictx, u32 id)
 			    struct iommufd_vdevice, obj);
 }
 
+#ifdef CONFIG_VFIO_NOIOMMU
+static inline bool is_vfio_noiommu(struct iommufd_device *idev)
+{
+	return !device_iommu_mapped(idev->dev) || !idev->dev->iommu;
+}
+#else
+static inline bool is_vfio_noiommu(struct iommufd_device *idev)
+{
+	return false;
+}
+#endif
+
 #ifdef CONFIG_IOMMUFD_TEST
 int iommufd_test(struct iommufd_ucmd *ucmd);
 void iommufd_selftest_destroy(struct iommufd_object *obj);
