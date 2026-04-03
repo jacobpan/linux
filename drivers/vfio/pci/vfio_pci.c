@@ -73,7 +73,7 @@ static bool vfio_pci_dev_in_denylist(struct pci_dev *pdev)
 		case PCI_DEVICE_ID_INTEL_QAT_DH895XCC_VF:
 		case PCI_DEVICE_ID_INTEL_DSA_SPR0:
 		case PCI_DEVICE_ID_INTEL_IAX_SPR0:
-			return true;
+			return false;
 		default:
 			return false;
 		}
