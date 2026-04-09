@@ -1,17 +1,65 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include <stdint.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 #include <linux/bits.h>
 #include <linux/errno.h>
 #include <linux/idxd.h>
 #include <linux/io.h>
+#include <linux/iommufd.h>
 #include <linux/pci_ids.h>
 #include <linux/sizes.h>
 
 #include <libvfio.h>
 
 #include "registers.h"
+
+/*
+ * In noiommu mode there is no IOMMU to translate IOVAs, so the device must
+ * perform DMA using physical addresses. In this case, IOVAs are used as
+ * handles used by IOMMU_IOAS_NOIOMMU_GET_PA to translatean IOVA to its backing
+ * physical address.
+ *
+ * If @contig_len is non-NULL, stores the number of bytes that are physically
+ * contiguous starting from the returned address.
+ */
+static iova_t iova_to_dma_addr(struct vfio_pci_device *device, iova_t iova,
+				u64 *contig_len)
+{
+	struct iommu *iommu = device->iommu;
+	struct iommu_ioas_noiommu_get_pa args = {
+		.size    = sizeof(args),
+		.ioas_id = iommu->ioas_id,
+		.iova    = iova,
+	};
+
+	if (!iommu->iommufd || !vfio_pci_noiommu_mode_enabled()) {
+		if (contig_len)
+			*contig_len = UINT64_MAX;
+		return iova;
+	}
+
+	VFIO_ASSERT_EQ(ioctl(iommu->iommufd, IOMMU_IOAS_NOIOMMU_GET_PA, &args), 0,
+		       "IOMMU_IOAS_NOIOMMU_GET_PA failed for iova 0x%lx\n", iova);
+
+       if (contig_len)
+		*contig_len = args.length;
+	return args.out_phys;
+}
+
+/* Translate a host virtual address to the DMA address the device should use. */
+static iova_t to_dma_addr(struct vfio_pci_device *device, void *vaddr)
+{
+	return iova_to_dma_addr(device, to_iova(device, vaddr), NULL);
+}
+
+static bool noiommu_mode(struct vfio_pci_device *device)
+{
+	struct iommu *iommu = device->iommu;
+
+	return iommu->iommufd && vfio_pci_noiommu_mode_enabled();
+}
 
 /* Vectors 1+ are available for work queue completion interrupts. */
 #define MSIX_VECTOR 1
@@ -291,7 +339,7 @@ static void dsa_copy_desc_init(struct vfio_pci_device *device,
 		.src_addr = src,
 		.dst_addr = dst,
 		.xfer_size = size,
-		.completion_addr = to_iova(device, &dsa->copy_completion),
+		.completion_addr = to_dma_addr(device, &dsa->copy_completion),
 		.int_handle = interrupt ? MSIX_VECTOR : 0,
 	};
 }
@@ -306,8 +354,8 @@ static void dsa_batch_desc_init(struct vfio_pci_device *device,
 		.opcode = DSA_OPCODE_BATCH,
 		.flags = IDXD_OP_FLAG_CRAV,
 		.priv = 1,
-		.completion_addr = to_iova(device, &dsa->batch_completion),
-		.desc_list_addr = to_iova(device, &dsa->copy[0]),
+		.completion_addr = to_dma_addr(device, &dsa->batch_completion),
+		.desc_list_addr = to_dma_addr(device, &dsa->copy[0]),
 		.desc_count = count,
 	};
 }
@@ -323,10 +371,41 @@ static void dsa_memcpy_one(struct vfio_pci_device *device,
 {
 	struct dsa_state *dsa = to_dsa_state(device);
 
-	memset(&dsa->copy_completion, 0, sizeof(dsa->copy_completion));
+	/*
+	 * In noiommu mode, user pages are not physically contiguous so a single
+	 * large DMA would overrun into unrelated physical memory.  Break the
+	 * transfer into chunks bounded by the contiguous physical extent of
+	 * both the source and destination.
+	 */
+	while (size) {
+		u64 src_contig, dst_contig, chunk;
+		iova_t src_pa, dst_pa;
+		bool last;
 
-	dsa_copy_desc_init(device, &dsa->copy[0], src, dst, size, interrupt);
-	dsa_desc_write(device, &dsa->copy[0]);
+		src_pa = iova_to_dma_addr(device, src, &src_contig);
+		dst_pa = iova_to_dma_addr(device, dst, &dst_contig);
+
+		chunk = min(src_contig, dst_contig);
+		chunk = min(chunk, size);
+		last = (chunk == size);
+
+		memset(&dsa->copy_completion, 0, sizeof(dsa->copy_completion));
+
+		dsa_copy_desc_init(device, &dsa->copy[0],
+				   src_pa, dst_pa, chunk,
+				   last && interrupt);
+		dsa_desc_write(device, &dsa->copy[0]);
+
+		VFIO_ASSERT_EQ(dsa_completion_wait(device,
+				&dsa->copy_completion), 0,
+			       "DMA chunk failed: src=0x%lx dst=0x%lx len=0x%llx\n",
+			       (unsigned long)src_pa, (unsigned long)dst_pa,
+			       (unsigned long long)chunk);
+
+		src += chunk;
+		dst += chunk;
+		size -= chunk;
+	}
 }
 
 static void dsa_memcpy_batch(struct vfio_pci_device *device,
@@ -380,8 +459,13 @@ static void dsa_memcpy_start(struct vfio_pci_device *device,
 {
 	struct dsa_state *dsa = to_dsa_state(device);
 
-	/* DSA devices require at least 2 copies per batch. */
-	if (count == 1)
+	/*
+	 * In noiommu mode, use the chunked single-descriptor path for all
+	 * copies since the batch path cannot handle non-contiguous PAs in
+	 * the src/dst buffers (each copy descriptor in the batch array
+	 * would need its own PA translation and chunking).
+	 */
+	if (count == 1 || noiommu_mode(device))
 		dsa_memcpy_one(device, src, dst, size, false);
 	else
 		dsa_memcpy_batch(device, src, dst, size, count);
@@ -394,7 +478,11 @@ static int dsa_memcpy_wait(struct vfio_pci_device *device)
 	struct dsa_state *dsa = to_dsa_state(device);
 	int r;
 
-	if (dsa->memcpy_count == 1)
+	/*
+	 * In noiommu mode, dsa_memcpy_one() already waited for each chunk.
+	 * The completion record holds the result from the last chunk.
+	 */
+	if (dsa->memcpy_count == 1 || noiommu_mode(device))
 		r = dsa_completion_wait(device, &dsa->copy_completion);
 	else
 		r = dsa_completion_wait(device, &dsa->batch_completion);
@@ -409,8 +497,8 @@ static void dsa_send_msi(struct vfio_pci_device *device)
 	struct dsa_state *dsa = to_dsa_state(device);
 
 	dsa_memcpy_one(device,
-		       to_iova(device, &dsa->send_msi_src),
-		       to_iova(device, &dsa->send_msi_dst),
+		       to_dma_addr(device, &dsa->send_msi_src),
+		       to_dma_addr(device, &dsa->send_msi_dst),
 		       sizeof(dsa->send_msi_src), true);
 
 	VFIO_ASSERT_EQ(dsa_completion_wait(device, &dsa->copy_completion), 0);
