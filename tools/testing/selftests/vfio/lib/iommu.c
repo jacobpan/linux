@@ -125,8 +125,11 @@ static int iommufd_map(struct iommu *iommu, struct dma_region *region)
 		.length = region->size,
 		.ioas_id = iommu->ioas_id,
 	};
+	printf("  iommufd_map: user_va=%p, iova=0x%lx, length=0x%lx\n",
+	       region->vaddr, (unsigned long)region->iova,
+	       (unsigned long)region->size);
 
-	if (ioctl(iommu->iommufd, IOMMU_IOAS_MAP, &args))
+	       if (ioctl(iommu->iommufd, IOMMU_IOAS_MAP, &args))
 		return -errno;
 
 	return 0;
