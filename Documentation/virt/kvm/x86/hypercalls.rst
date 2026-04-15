@@ -190,3 +190,53 @@ the KVM_CAP_EXIT_HYPERCALL capability. Userspace must enable that capability
 before advertising KVM_FEATURE_HC_MAP_GPA_RANGE in the guest CPUID.  In
 addition, if the guest supports KVM_FEATURE_MIGRATION_CONTROL, userspace
 must also set up an MSR filter to process writes to MSR_KVM_MIGRATION_CONTROL.
+
+10. KVM_HC_PIN_GPA_RANGE
+-------------------------
+:Architecture: x86
+:Status: active
+:Purpose: Request the host to pin a GPA range so that the guest physical
+          pages are not swapped or migrated, enabling direct DMA by
+          assigned devices.
+
+a0: the guest physical address of the start page (must be page-aligned)
+a1: the number of (4kb) pages (must be contiguous in GPA space)
+a2: attributes
+
+    Where 'attributes' :
+        * bits  1:0 - preferred page size encoding 0 = 4kb, 1 = 2mb, 2 = 1gb
+        * bits 63:2 - reserved (must be zero)
+
+The guest uses this hypercall to inform the host that a range of guest
+physical memory must remain pinned for direct device DMA.  This is the
+analog of HyperV's HvCallPinGpaPageRanges.
+
+Returns 0 on success, or a negative error code on failure.
+
+11. KVM_HC_UNPIN_GPA_RANGE
+---------------------------
+:Architecture: x86
+:Status: active
+:Purpose: Request the host to unpin a previously pinned GPA range,
+          allowing the host to swap or migrate those pages again.
+
+a0: the guest physical address of the start page (must be page-aligned)
+a1: the number of (4kb) pages (must be contiguous in GPA space)
+a2: attributes
+
+    Where 'attributes' :
+        * bits  1:0 - preferred page size encoding 0 = 4kb, 1 = 2mb, 2 = 1gb
+        * bits 63:2 - reserved (must be zero)
+
+The guest uses this hypercall to inform the host that a previously pinned
+range of guest physical memory is no longer needed for direct device DMA
+and may be unpinned.  This is the analog of HyperV's
+HvCallUnpinGpaPageRanges.
+
+Returns 0 on success, or a negative error code on failure.
+
+**Implementation note**: Both KVM_HC_PIN_GPA_RANGE and
+KVM_HC_UNPIN_GPA_RANGE are implemented in userspace via the
+KVM_CAP_EXIT_HYPERCALL capability.  Userspace must enable that capability
+with the appropriate bits set before advertising
+KVM_FEATURE_HC_PIN_UNPIN_GPA in the guest CPUID.

@@ -951,6 +951,36 @@ static void kvm_sev_hc_page_enc_status(unsigned long pfn, int npages, bool enc)
 			   KVM_MAP_GPA_RANGE_ENC_STAT(enc) | KVM_MAP_GPA_RANGE_PAGE_SZ_4K);
 }
 
+/**
+ * kvm_pin_gpa_range - Ask host to pin a range of guest physical pages
+ * @gpa:	guest physical address (must be page-aligned)
+ * @npages:	number of 4KB pages to pin
+ * @attrs:	KVM_PIN_GPA_RANGE_PAGE_SZ_* flags
+ *
+ * Returns 0 on success, negative KVM error code on failure.
+ * Requires KVM_FEATURE_HC_PIN_UNPIN_GPA to be advertised by the host.
+ */
+long kvm_pin_gpa_range(u64 gpa, u64 npages, u64 attrs)
+{
+	return kvm_hypercall3(KVM_HC_PIN_GPA_RANGE, gpa, npages, attrs);
+}
+EXPORT_SYMBOL_GPL(kvm_pin_gpa_range);
+
+/**
+ * kvm_unpin_gpa_range - Ask host to unpin a range of guest physical pages
+ * @gpa:	guest physical address (must be page-aligned)
+ * @npages:	number of 4KB pages to unpin
+ * @attrs:	KVM_PIN_GPA_RANGE_PAGE_SZ_* flags
+ *
+ * Returns 0 on success, negative KVM error code on failure.
+ * Requires KVM_FEATURE_HC_PIN_UNPIN_GPA to be advertised by the host.
+ */
+long kvm_unpin_gpa_range(u64 gpa, u64 npages, u64 attrs)
+{
+	return kvm_hypercall3(KVM_HC_UNPIN_GPA_RANGE, gpa, npages, attrs);
+}
+EXPORT_SYMBOL_GPL(kvm_unpin_gpa_range);
+
 static void __init kvm_init_platform(void)
 {
 	u64 tolud = PFN_PHYS(e820__end_of_low_ram_pfn());

@@ -231,6 +231,7 @@ struct kvm_x86_cpu_feature {
 #define X86_FEATURE_KVM_MSI_EXT_DEST_ID	KVM_X86_CPU_FEATURE(0x40000001, 0, EAX, 15)
 #define X86_FEATURE_KVM_HC_MAP_GPA_RANGE	KVM_X86_CPU_FEATURE(0x40000001, 0, EAX, 16)
 #define X86_FEATURE_KVM_MIGRATION_CONTROL	KVM_X86_CPU_FEATURE(0x40000001, 0, EAX, 17)
+#define X86_FEATURE_KVM_HC_PIN_UNPIN_GPA	KVM_X86_CPU_FEATURE(0x40000001, 0, EAX, 18)
 
 /*
  * Same idea as X86_FEATURE_XXX, but X86_PROPERTY_XXX retrieves a multi-bit
@@ -1402,6 +1403,20 @@ static inline void kvm_hypercall_map_gpa_range(uint64_t gpa, uint64_t size,
 	uint64_t ret = __kvm_hypercall_map_gpa_range(gpa, size, flags);
 
 	GUEST_ASSERT(!ret);
+}
+
+static inline uint64_t __kvm_hypercall_pin_gpa_range(uint64_t gpa,
+						     uint64_t npages,
+						     uint64_t attrs)
+{
+	return kvm_hypercall(KVM_HC_PIN_GPA_RANGE, gpa, npages, attrs, 0);
+}
+
+static inline uint64_t __kvm_hypercall_unpin_gpa_range(uint64_t gpa,
+						       uint64_t npages,
+						       uint64_t attrs)
+{
+	return kvm_hypercall(KVM_HC_UNPIN_GPA_RANGE, gpa, npages, attrs, 0);
 }
 
 /*

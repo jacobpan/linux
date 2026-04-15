@@ -126,6 +126,8 @@ unsigned int kvm_arch_para_hints(void);
 void kvm_async_pf_task_wait_schedule(u32 token);
 u32 kvm_read_and_reset_apf_flags(void);
 bool __kvm_handle_async_pf(struct pt_regs *regs, u32 token);
+long kvm_pin_gpa_range(u64 gpa, u64 npages, u64 attrs);
+long kvm_unpin_gpa_range(u64 gpa, u64 npages, u64 attrs);
 
 DECLARE_STATIC_KEY_FALSE(kvm_async_pf_enabled);
 

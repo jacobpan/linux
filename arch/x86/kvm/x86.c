@@ -117,7 +117,9 @@ u64 __read_mostly efer_reserved_bits = ~((u64)(EFER_SCE | EFER_LME | EFER_LMA));
 static u64 __read_mostly efer_reserved_bits = ~((u64)EFER_SCE);
 #endif
 
-#define KVM_EXIT_HYPERCALL_VALID_MASK (1 << KVM_HC_MAP_GPA_RANGE)
+#define KVM_EXIT_HYPERCALL_VALID_MASK (BIT(KVM_HC_MAP_GPA_RANGE) | \
+					 BIT(KVM_HC_PIN_GPA_RANGE) | \
+					 BIT(KVM_HC_UNPIN_GPA_RANGE))
 
 #define KVM_CAP_PMU_VALID_MASK KVM_PMU_CAP_DISABLE
 
@@ -10460,6 +10462,58 @@ int ____kvm_emulate_hypercall(struct kvm_vcpu *vcpu, int cpl,
 		 * vcpu->run->hypercall.ret, ensuring that it is zero to not break QEMU.
 		 */
 		vcpu->run->hypercall.ret = 0;
+		vcpu->run->hypercall.args[0]  = gpa;
+		vcpu->run->hypercall.args[1]  = npages;
+		vcpu->run->hypercall.args[2]  = attrs;
+		vcpu->run->hypercall.flags    = 0;
+		if (op_64_bit)
+			vcpu->run->hypercall.flags |= KVM_EXIT_HYPERCALL_LONG_MODE;
+
+		WARN_ON_ONCE(vcpu->run->hypercall.flags & KVM_EXIT_HYPERCALL_MBZ);
+		vcpu->arch.complete_userspace_io = complete_hypercall;
+		return 0;
+	}
+	/*
+	 * KVM_HC_PIN_GPA_RANGE / KVM_HC_UNPIN_GPA_RANGE
+	 *
+	 * Allow a guest to request that specific GPA ranges be pinned
+	 * (not swapped/migrated) or unpinned by the host.  This enables
+	 * guest-aware memory oversubscription with VFIO-assigned devices:
+	 * pinned pages can be direct DMA targets, while unpinned pages
+	 * must be bounced through SWIOTLB.
+	 *
+	 * Analogous to KVM_HC_MAP_GPA_RANGE for CoCo private/shared
+	 * transitions, but instead of switching memory backends
+	 * (guest_memfd vs shared), these hypercalls communicate DMA
+	 * pinning intent to userspace (QEMU), which tracks pinned state
+	 * and prevents page eviction for the specified ranges.
+	 *
+	 * Args:  a0 = page-aligned GPA start
+	 *        a1 = number of pages
+	 *        a2 = attributes (page size hints via
+	 *             KVM_PIN_GPA_RANGE_PAGE_SZ_*)
+	 *
+	 * Returns -KVM_ENOSYS if userspace has not enabled these
+	 * hypercalls via KVM_CAP_EXIT_HYPERCALL, or -KVM_EINVAL for
+	 * bad arguments.  Otherwise exits to userspace for handling.
+	 */
+	case KVM_HC_PIN_GPA_RANGE:
+	case KVM_HC_UNPIN_GPA_RANGE: {
+		u64 gpa = a0, npages = a1, attrs = a2;
+
+		ret = -KVM_ENOSYS;
+		if (!user_exit_on_hypercall(vcpu->kvm, nr))
+			break;
+
+		if (!PAGE_ALIGNED(gpa) || !npages ||
+		    gpa_to_gfn(gpa) + npages <= gpa_to_gfn(gpa)) {
+			ret = -KVM_EINVAL;
+			break;
+		}
+
+		vcpu->run->exit_reason        = KVM_EXIT_HYPERCALL;
+		vcpu->run->hypercall.nr       = nr;
+		vcpu->run->hypercall.ret      = 0;
 		vcpu->run->hypercall.args[0]  = gpa;
 		vcpu->run->hypercall.args[1]  = npages;
 		vcpu->run->hypercall.args[2]  = attrs;
