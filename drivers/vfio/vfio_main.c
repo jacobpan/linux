@@ -58,8 +58,31 @@ static struct vfio {
 
 #ifdef CONFIG_VFIO_NOIOMMU
 bool vfio_noiommu __read_mostly;
-module_param_named(enable_unsafe_noiommu_mode,
-		   vfio_noiommu, bool, S_IRUGO | S_IWUSR);
+
+static int vfio_noiommu_set(const char *val, const struct kernel_param *kp)
+{
+	bool new_val;
+	int ret;
+
+	ret = kstrtobool(val, &new_val);
+	if (ret)
+		return ret;
+
+	/* Once enabled, noiommu mode cannot be disabled */
+	if (vfio_noiommu && !new_val)
+		return -EPERM;
+
+	vfio_noiommu = new_val;
+	return 0;
+}
+
+static const struct kernel_param_ops vfio_noiommu_ops = {
+	.set = vfio_noiommu_set,
+	.get = param_get_bool,
+};
+
+module_param_cb(enable_unsafe_noiommu_mode, &vfio_noiommu_ops,
+		&vfio_noiommu, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(enable_unsafe_noiommu_mode, "Enable UNSAFE, no-IOMMU mode.  This mode provides no device isolation, no DMA translation, no host kernel protection, cannot be used for device assignment to virtual machines, requires RAWIO permissions, and will taint the kernel.  If you do not know what this is for, step away. (default: false)");
 #endif
 
@@ -332,6 +355,25 @@ static int __vfio_register_dev(struct vfio_device *device,
 	if (!device->dev_set)
 		vfio_assign_device_set(device, device);
 
+	/*
+	 * Determine noiommu status early, before group setup, so that the
+	 * flag is available regardless of CONFIG_VFIO_GROUP.  A device
+	 * without an iommu_group when vfio_noiommu is enabled operates in
+	 * no-IOMMU mode.
+	 */
+	if (type == VFIO_IOMMU && vfio_noiommu) {
+		struct iommu_group *iommu_group = iommu_group_get(device->dev);
+
+		if (!iommu_group) {
+			device->noiommu = true;
+			add_taint(TAINT_USER, LOCKDEP_STILL_OK);
+			dev_warn(device->dev,
+				 "Adding kernel taint for vfio-noiommu device\n");
+		} else {
+			iommu_group_put(iommu_group);
+		}
+	}
+
 	ret = vfio_device_set_group(device, type);
 	if (ret)
 		return ret;
@@ -359,10 +401,6 @@ static int __vfio_register_dev(struct vfio_device *device,
 
 	/* Refcounting can't start until the driver calls register */
 	refcount_set(&device->refcount, 1);
-
-	/* noiommu device w/o container may have NULL group */
-	if (vfio_device_is_noiommu(device) && !vfio_device_has_group(device))
-		return 0;
 
 	vfio_device_group_register(device);
 	vfio_device_debugfs_init(device);

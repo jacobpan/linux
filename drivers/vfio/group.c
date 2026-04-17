@@ -390,9 +390,6 @@ int vfio_device_block_group(struct vfio_device *device)
 	struct vfio_group *group = device->group;
 	int ret = 0;
 
-	if (vfio_null_group_allowed() && !group)
-		return 0;
-
 	mutex_lock(&group->group_lock);
 	if (group->opened_file) {
 		ret = -EBUSY;
@@ -409,9 +406,6 @@ out_unlock:
 void vfio_device_unblock_group(struct vfio_device *device)
 {
 	struct vfio_group *group = device->group;
-
-	if (vfio_null_group_allowed() && !group)
-		return;
 
 	mutex_lock(&group->group_lock);
 	group->cdev_device_open_cnt--;
@@ -604,14 +598,6 @@ static struct vfio_group *vfio_noiommu_group_alloc(struct vfio_device *vdev,
 	struct vfio_group *group;
 	int ret;
 
-	/*
-	 * With noiommu enabled under cdev interface only, there is no need to
-	 * create a vfio_group if the group based containers are not enabled.
-	 * The cdev interface is exclusively used for iommufd.
-	 */
-	if (vfio_null_group_allowed())
-		return NULL;
-
 	iommu_group = iommu_group_alloc();
 	if (IS_ERR(iommu_group))
 		return ERR_CAST(iommu_group);
@@ -661,20 +647,13 @@ static struct vfio_group *vfio_group_find_or_alloc(struct vfio_device *vdev)
 	struct vfio_group *group;
 
 	iommu_group = iommu_group_get(vdev->dev);
-	if (!iommu_group && vfio_noiommu) {
-		vdev->noiommu = 1;
+	if (!iommu_group && vdev->noiommu) {
 		/*
-		 * With noiommu enabled, create an IOMMU group for devices that
-		 * don't already have one, implying no IOMMU hardware/driver
-		 * exists.  Taint the kernel because we're about to give a DMA
-		 * capable device to a user without IOMMU protection.
+		 * noiommu flag and taint are already set by
+		 * __vfio_register_dev().  Create the dummy group for
+		 * container/group interface users.
 		 */
-		group = vfio_noiommu_group_alloc(vdev, VFIO_NO_IOMMU);
-		if (!IS_ERR(group)) {
-			add_taint(TAINT_USER, LOCKDEP_STILL_OK);
-			dev_warn(vdev->dev, "Adding kernel taint for vfio-noiommu group on device\n");
-		}
-		return group;
+		return vfio_noiommu_group_alloc(vdev, VFIO_NO_IOMMU);
 	}
 
 	if (!iommu_group)
@@ -719,9 +698,6 @@ void vfio_device_remove_group(struct vfio_device *device)
 {
 	struct vfio_group *group = device->group;
 	struct iommu_group *iommu_group;
-
-	if (!group)
-		return;
 
 	if (group->type == VFIO_NO_IOMMU || group->type == VFIO_EMULATED_IOMMU)
 		iommu_group_remove_device(device->dev);
@@ -774,9 +750,6 @@ void vfio_device_group_register(struct vfio_device *device)
 
 void vfio_device_group_unregister(struct vfio_device *device)
 {
-	if (!device->group)
-		return;
-
 	mutex_lock(&device->group->device_lock);
 	list_del(&device->group_next);
 	mutex_unlock(&device->group->device_lock);
