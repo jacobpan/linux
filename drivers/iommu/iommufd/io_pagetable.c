@@ -857,7 +857,7 @@ int iopt_get_phys(struct io_pagetable *iopt, unsigned long iova, u64 *paddr,
 	u64 tmp_paddr = 0;
 	int rc = 0;
 
-	if (!IS_ENABLED(CONFIG_VFIO_NOIOMMU))
+	if (!IS_ENABLED(CONFIG_IOMMUFD_NOIOMMU))
 		return -EOPNOTSUPP;
 
 	down_read(&iopt->iova_rwsem);

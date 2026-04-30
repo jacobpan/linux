@@ -22,8 +22,7 @@ config VFIO_DEVICE_CDEV
 	  The VFIO device cdev is another way for userspace to get device
 	  access. Userspace gets device fd by opening device cdev under
 	  /dev/vfio/devices/vfioX, and then bind the device fd with an iommufd
-	  to set up secure DMA context for device access.  This interface does
-	  not support noiommu.
+	  to set up secure DMA context for device access.
 
 	  If you don't know what to do here, say N.
 
@@ -60,9 +59,9 @@ config VFIO_IOMMU_SPAPR_TCE
 	default VFIO
 endif
 
-config VFIO_NOIOMMU
+config VFIO_GROUP_NOIOMMU
 	bool "VFIO No-IOMMU support"
-	depends on VFIO_GROUP
+	depends on VFIO_GROUP && (VFIO_CONTAINER || IOMMUFD_VFIO_CONTAINER)
 	help
 	  VFIO is built on the ability to isolate devices using the IOMMU.
 	  Only with an IOMMU can userspace access to DMA capable devices be
@@ -72,6 +71,23 @@ config VFIO_NOIOMMU
 	  in an unsupportable kernel and will therefore taint the kernel.
 	  Device assignment to virtual machines is also not possible with
 	  this mode since there is no IOMMU to provide DMA translation.
+
+	  If you don't know what to do here, say N.
+
+config VFIO_CDEV_NOIOMMU
+	bool "VFIO cdev No-IOMMU support"
+	depends on VFIO_DEVICE_CDEV
+	depends on IOMMUFD_NOIOMMU
+	help
+	  VFIO cdev no-IOMMU mode enables device access via the cdev
+	  interface without hardware IOMMU backing. This relies on
+	  IOMMUFD_NOIOMMU to provide a SW-only IO page table for
+	  IOVA-to-PA lookups.
+
+	  Use of this mode will result in an unsupportable kernel and
+	  will therefore taint the kernel. Device assignment to virtual
+	  machines is also not possible with this mode since there is
+	  no IOMMU to provide DMA translation.
 
 	  If you don't know what to do here, say N.
 

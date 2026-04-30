@@ -10,8 +10,10 @@
 
 static const struct iommu_ops *get_iommu_ops(struct iommufd_device *idev)
 {
-	if (IS_ENABLED(CONFIG_VFIO_NOIOMMU) && !idev->igroup->group)
+	if (IS_ENABLED(CONFIG_IOMMUFD_NOIOMMU) && !idev->igroup->group)
 		return &iommufd_noiommu_ops;
+	if (WARN_ON_ONCE(!idev->dev->iommu))
+		return NULL;
 	return dev_iommu_ops(idev->dev);
 }
 
@@ -126,6 +128,8 @@ iommufd_hwpt_paging_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 	struct iommufd_hw_pagetable *hwpt;
 	int rc;
 
+	if (!ops)
+		return ERR_PTR(-ENODEV);
 	lockdep_assert_held(&ioas->mutex);
 
 	if ((flags || user_data) && !ops->domain_alloc_paging_flags)
