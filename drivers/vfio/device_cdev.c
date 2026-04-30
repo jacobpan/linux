@@ -95,6 +95,9 @@ int vfio_device_fops_cdev_open(struct inode *inode, struct file *file)
 	if (vfio_liveupdate_incoming_is_preserved(device))
 		return -EBUSY;
 
+	if (device->noiommu && !capable(CAP_SYS_RAWIO))
+		return -EPERM;
+
 	return vfio_device_cdev_open(device, &file);
 }
 
@@ -154,6 +157,9 @@ long vfio_df_ioctl_bind_iommufd(struct vfio_device_file *df,
 	/* BIND_IOMMUFD only allowed for cdev fds */
 	if (df->group)
 		return -EINVAL;
+
+	if (device->noiommu && !capable(CAP_SYS_RAWIO))
+		return -EPERM;
 
 	ret = vfio_device_block_group(device);
 	if (ret)
