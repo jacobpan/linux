@@ -192,7 +192,7 @@ static int ioas_destroy_ioctl(int iommufd, uint32_t ioas_id)
 	return ioctl(iommufd, IOMMU_DESTROY, &destroy_args);
 }
 
-static int ioas_get_pa_ioctl(int iommufd, uint32_t ioas_id, uint64_t iova,
+static int ioas_noiommu_get_pa_ioctl(int iommufd, uint32_t ioas_id, uint64_t iova,
 			     uint64_t *phys_out, uint64_t *length_out)
 {
 	struct {
@@ -210,16 +210,16 @@ static int ioas_get_pa_ioctl(int iommufd, uint32_t ioas_id, uint64_t iova,
 		.iova = iova,
 	};
 
-	printf("  ioas_get_pa_ioctl: ioas_id=%u, iova=0x%lx\n",
+	printf("  ioas_noiommu_get_pa_ioctl: ioas_id=%u, iova=0x%lx\n",
 	       ioas_id, (unsigned long)iova);
 
-	if (ioctl(iommufd, IOMMU_IOAS_GET_PA, &get_pa) != 0) {
-		printf("  IOMMU_IOAS_GET_PA failed: %s (errno=%d)\n",
+	if (ioctl(iommufd, IOMMU_IOAS_NOIOMMU_GET_PA, &get_pa) != 0) {
+		printf("  IOMMU_IOAS_NOIOMMU_GET_PA failed: %s (errno=%d)\n",
 		       strerror(errno), errno);
 		return -1;
 	}
 
-	printf("  IOMMU_IOAS_GET_PA succeeded: PA=0x%lx, length=0x%lx\n",
+	printf("  IOMMU_IOAS_NOIOMMU_GET_PA succeeded: PA=0x%lx, length=0x%lx\n",
 	       (unsigned long)get_pa.out_phys, (unsigned long)get_pa.out_length);
 
 	if (phys_out)
@@ -467,11 +467,11 @@ TEST_F(vfio_noiommu, multiple_ioas_alloc)
 
 /*
  * Test: Query physical address for IOVA
- * Tests IOMMU_IOAS_GET_PA ioctl to translate IOVA to physical address
+ * Tests IOMMU_IOAS_NOIOMMU_GET_PA ioctl to translate IOVA to physical address
  * Note: Device must be attached to IOAS for PA query to work
  */
 #define NR_PAGES 32
-TEST_F(vfio_noiommu, ioas_get_pa_mapped)
+TEST_F(vfio_noiommu, ioas_noiommu_get_pa_mapped)
 {
 	struct iommu_ioas_alloc alloc_args;
 	long page_size = sysconf(_SC_PAGESIZE);
@@ -502,7 +502,7 @@ TEST_F(vfio_noiommu, ioas_get_pa_mapped)
 		return;
 
 	/* Query the physical address for the mapped dummy IOVA */
-	ret = ioas_get_pa_ioctl(self->iommufd, alloc_args.out_ioas_id,
+	ret = ioas_noiommu_get_pa_ioctl(self->iommufd, alloc_args.out_ioas_id,
 			       iova, &phys, &length);
 
 	if (ret == 0) {
@@ -518,7 +518,7 @@ TEST_F(vfio_noiommu, ioas_get_pa_mapped)
 	 */
 	phys = 0;
 	length = 0;
-	ret = ioas_get_pa_ioctl(self->iommufd, alloc_args.out_ioas_id,
+	ret = ioas_noiommu_get_pa_ioctl(self->iommufd, alloc_args.out_ioas_id,
 				iova + 0x80, &phys, &length);
 	if (ret == 0) {
 		ASSERT_NE(0, phys);
@@ -530,7 +530,7 @@ TEST_F(vfio_noiommu, ioas_get_pa_mapped)
 	}
 }
 
-TEST_F(vfio_noiommu, ioas_get_pa_unmapped_fails)
+TEST_F(vfio_noiommu, ioas_noiommu_get_pa_unmapped_fails)
 {
 	struct iommu_ioas_alloc alloc_args;
 
@@ -538,7 +538,7 @@ TEST_F(vfio_noiommu, ioas_get_pa_unmapped_fails)
 						  &alloc_args));
 
 	/* Try to retrieve unmapped IOVA (should fail) */
-	ASSERT_NE(0, ioas_get_pa_ioctl(self->iommufd, alloc_args.out_ioas_id,
+	ASSERT_NE(0, ioas_noiommu_get_pa_ioctl(self->iommufd, alloc_args.out_ioas_id,
 				       0x10000, NULL, NULL));
 }
 

@@ -892,6 +892,9 @@ int iopt_get_phys(struct io_pagetable *iopt, unsigned long iova, u64 *paddr,
 		if (check_add_overflow(iova, PAGE_SIZE, &next_iova))
 			break;
 
+		if (next_iova > iopt_area_last_iova(area))
+			break;
+
 		next_paddr = iommu_iova_to_phys(area->storage_domain, next_iova);
 
 		if (!next_paddr || next_paddr != tmp_paddr + PAGE_SIZE)

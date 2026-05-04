@@ -375,9 +375,9 @@ out_put:
 	return rc;
 }
 
-int iommufd_ioas_get_pa(struct iommufd_ucmd *ucmd)
+int iommufd_ioas_noiommu_get_pa(struct iommufd_ucmd *ucmd)
 {
-	struct iommu_ioas_get_pa *cmd = ucmd->cmd;
+	struct iommu_ioas_noiommu_get_pa *cmd = ucmd->cmd;
 	struct iommufd_ioas *ioas;
 	int rc;
 

@@ -18,7 +18,7 @@
 /*
  * In noiommu mode there is no IOMMU to translate IOVAs, so the device must
  * perform DMA using physical addresses. In this case, IOVAs are used as
- * handles used by IOMMU_IOAS_GET_PA to translatean IOVA to its backing
+ * handles used by IOMMU_IOAS_NOIOMMU_GET_PA to translatean IOVA to its backing
  * physical address.
  *
  * If @contig_len is non-NULL, stores the number of bytes that are physically
@@ -28,7 +28,7 @@ static iova_t iova_to_dma_addr(struct vfio_pci_device *device, iova_t iova,
 				u64 *contig_len)
 {
 	struct iommu *iommu = device->iommu;
-	struct iommu_ioas_get_pa args = {
+	struct iommu_ioas_noiommu_get_pa args = {
 		.size    = sizeof(args),
 		.ioas_id = iommu->ioas_id,
 		.iova    = iova,
@@ -40,8 +40,8 @@ static iova_t iova_to_dma_addr(struct vfio_pci_device *device, iova_t iova,
 		return iova;
 	}
 
-	VFIO_ASSERT_EQ(ioctl(iommu->iommufd, IOMMU_IOAS_GET_PA, &args), 0,
-		       "IOMMU_IOAS_GET_PA failed for iova 0x%lx\n", iova);
+	VFIO_ASSERT_EQ(ioctl(iommu->iommufd, IOMMU_IOAS_NOIOMMU_GET_PA, &args), 0,
+		       "IOMMU_IOAS_NOIOMMU_GET_PA failed for iova 0x%lx\n", iova);
 
        if (contig_len)
 		*contig_len = args.out_length;
