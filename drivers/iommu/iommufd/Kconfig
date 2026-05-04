@@ -19,7 +19,6 @@ if IOMMUFD
 config IOMMUFD_NOIOMMU
 	bool "IOMMUFD no-IOMMU support"
 	depends on !GENERIC_ATOMIC64 # IOMMU_PT_AMDV1 requires cmpxchg64
-	depends on IOMMU_SUPPORT
 	select GENERIC_PT
 	select IOMMU_PT
 	select IOMMU_PT_AMDV1
