@@ -216,6 +216,7 @@ void iommufd_device_destroy(struct iommufd_object *obj)
 	struct iommufd_device *idev =
 		container_of(obj, struct iommufd_device, obj);
 
+	/* igroup is NULL when destroy called during bind error cleanup */
 	if (!idev->igroup)
 		return;
 	if (!iommufd_device_is_noiommu(idev))
