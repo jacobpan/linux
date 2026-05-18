@@ -227,7 +227,9 @@ struct iommu_ioas_map {
  * @ioas_id: IOAS ID to query IOVA to PA mapping from
  * @__reserved: Must be 0
  * @iova: IOVA to query
- * @out_length: Number of bytes contiguous physical address starting from phys
+ * @length: On input, maximum number of bytes to scan for contiguity (0 means
+ *          no limit). On output, actual number of contiguous bytes starting
+ *          from out_phys.
  * @out_phys: Output physical address the IOVA maps to
  *
  * Query the physical address backing an IOVA range. The entire range must be
@@ -239,7 +241,7 @@ struct iommu_ioas_noiommu_get_pa {
 	__u32 ioas_id;
 	__u32 __reserved;
 	__aligned_u64 iova;
-	__aligned_u64 out_length;
+	__aligned_u64 length;
 	__aligned_u64 out_phys;
 };
 #define IOMMU_IOAS_NOIOMMU_GET_PA _IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_NOIOMMU_GET_PA)

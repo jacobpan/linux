@@ -192,26 +192,20 @@ static int ioas_destroy_ioctl(int iommufd, uint32_t ioas_id)
 	return ioctl(iommufd, IOMMU_DESTROY, &destroy_args);
 }
 
-static int ioas_noiommu_get_pa_ioctl(int iommufd, uint32_t ioas_id, uint64_t iova,
+static int ioas_noiommu_get_pa_ioctl_len(int iommufd, uint32_t ioas_id,
+			     uint64_t iova, uint64_t max_length,
 			     uint64_t *phys_out, uint64_t *length_out)
 {
-	struct {
-		__u32 size;
-		__u32 flags;
-		__u32 ioas_id;
-		__u32 __reserved;
-		__u64 iova;
-		__u64 out_length;
-		__u64 out_phys;
-	} get_pa = {
+	struct iommu_ioas_noiommu_get_pa get_pa = {
 		.size = sizeof(get_pa),
 		.flags = 0,
 		.ioas_id = ioas_id,
 		.iova = iova,
+		.length = max_length,
 	};
 
-	printf("  ioas_noiommu_get_pa_ioctl: ioas_id=%u, iova=0x%lx\n",
-	       ioas_id, (unsigned long)iova);
+	printf("  ioas_noiommu_get_pa_ioctl: ioas_id=%u, iova=0x%lx, max_length=0x%lx\n",
+	       ioas_id, (unsigned long)iova, (unsigned long)max_length);
 
 	if (ioctl(iommufd, IOMMU_IOAS_NOIOMMU_GET_PA, &get_pa) != 0) {
 		printf("  IOMMU_IOAS_NOIOMMU_GET_PA failed: %s (errno=%d)\n",
@@ -220,14 +214,21 @@ static int ioas_noiommu_get_pa_ioctl(int iommufd, uint32_t ioas_id, uint64_t iov
 	}
 
 	printf("  IOMMU_IOAS_NOIOMMU_GET_PA succeeded: PA=0x%lx, length=0x%lx\n",
-	       (unsigned long)get_pa.out_phys, (unsigned long)get_pa.out_length);
+	       (unsigned long)get_pa.out_phys, (unsigned long)get_pa.length);
 
 	if (phys_out)
 		*phys_out = get_pa.out_phys;
 	if (length_out)
-		*length_out = get_pa.out_length;
+		*length_out = get_pa.length;
 
 	return 0;
+}
+
+static int ioas_noiommu_get_pa_ioctl(int iommufd, uint32_t ioas_id, uint64_t iova,
+			     uint64_t *phys_out, uint64_t *length_out)
+{
+	return ioas_noiommu_get_pa_ioctl_len(iommufd, ioas_id, iova, 0,
+					     phys_out, length_out);
 }
 
 FIXTURE(vfio_noiommu) {
@@ -540,6 +541,102 @@ TEST_F(vfio_noiommu, ioas_noiommu_get_pa_unmapped_fails)
 	/* Try to retrieve unmapped IOVA (should fail) */
 	ASSERT_NE(0, ioas_noiommu_get_pa_ioctl(self->iommufd, alloc_args.out_ioas_id,
 				       0x10000, NULL, NULL));
+}
+
+/*
+ * Test: length == 0 means no limit (backward compat default)
+ */
+TEST_F(vfio_noiommu, ioas_noiommu_get_pa_length_zero_no_limit)
+{
+	struct iommu_ioas_alloc alloc_args;
+	long page_size = sysconf(_SC_PAGESIZE);
+	uint64_t iova = 0x200000;
+	uint64_t phys_nolimit = 0, phys_zero = 0;
+	uint64_t len_nolimit = 0, len_zero = 0;
+	int ret;
+
+	ASSERT_GT(page_size, 0);
+
+	ASSERT_EQ(0, vfio_device_bind_iommufd_ioctl(self->cdev_fd,
+						    self->iommufd));
+	ASSERT_EQ(0, vfio_device_ioas_alloc_ioctl(self->iommufd, &alloc_args));
+	ASSERT_EQ(0, vfio_device_attach_iommufd_pt_ioctl(self->cdev_fd,
+							 alloc_args.out_ioas_id));
+
+	ret = ioas_map_pages(self->iommufd, alloc_args.out_ioas_id,
+			     iova, page_size * NR_PAGES, true);
+	if (ret != 0)
+		return;
+
+	/* Query with length=0 (no limit, default behavior) */
+	ret = ioas_noiommu_get_pa_ioctl_len(self->iommufd, alloc_args.out_ioas_id,
+					    iova, 0, &phys_zero, &len_zero);
+	if (ret != 0)
+		return;
+
+	/* Query with the wrapper (also passes 0) — must match */
+	ret = ioas_noiommu_get_pa_ioctl(self->iommufd, alloc_args.out_ioas_id,
+					iova, &phys_nolimit, &len_nolimit);
+	ASSERT_EQ(0, ret);
+	ASSERT_EQ(phys_zero, phys_nolimit);
+	ASSERT_EQ(len_zero, len_nolimit);
+}
+
+/*
+ * Test: length caps the returned contiguous range
+ */
+TEST_F(vfio_noiommu, ioas_noiommu_get_pa_length_capped)
+{
+	struct iommu_ioas_alloc alloc_args;
+	long page_size = sysconf(_SC_PAGESIZE);
+	uint64_t iova = 0x200000;
+	uint64_t phys = 0;
+	uint64_t len_full = 0, len_capped = 0;
+	uint64_t cap;
+	int ret;
+
+	ASSERT_GT(page_size, 0);
+
+	ASSERT_EQ(0, vfio_device_bind_iommufd_ioctl(self->cdev_fd,
+						    self->iommufd));
+	ASSERT_EQ(0, vfio_device_ioas_alloc_ioctl(self->iommufd, &alloc_args));
+	ASSERT_EQ(0, vfio_device_attach_iommufd_pt_ioctl(self->cdev_fd,
+							 alloc_args.out_ioas_id));
+
+	ret = ioas_map_pages(self->iommufd, alloc_args.out_ioas_id,
+			     iova, page_size * NR_PAGES, true);
+	if (ret != 0)
+		return;
+
+	/* First get the full uncapped length */
+	ret = ioas_noiommu_get_pa_ioctl(self->iommufd, alloc_args.out_ioas_id,
+					iova, &phys, &len_full);
+	if (ret != 0)
+		return;
+
+	ASSERT_NE(0, phys);
+	ASSERT_NE(0, len_full);
+
+	/* Cap to a single page — returned length must not exceed it */
+	cap = page_size;
+	ret = ioas_noiommu_get_pa_ioctl_len(self->iommufd, alloc_args.out_ioas_id,
+					    iova, cap, &phys, &len_capped);
+	ASSERT_EQ(0, ret);
+	ASSERT_LE(len_capped, cap);
+	ASSERT_NE(0, len_capped);
+
+	/*
+	 * If full length was larger than one page, confirm capping works.
+	 * Otherwise the mapping wasn't contiguous enough to test.
+	 */
+	if (len_full > cap)
+		ASSERT_GT(len_full, len_capped);
+
+	/* Cap to a very large value — should return the same as uncapped */
+	ret = ioas_noiommu_get_pa_ioctl_len(self->iommufd, alloc_args.out_ioas_id,
+					    iova, UINT64_MAX, &phys, &len_capped);
+	ASSERT_EQ(0, ret);
+	ASSERT_EQ(len_full, len_capped);
 }
 
 int main(int argc, char *argv[])

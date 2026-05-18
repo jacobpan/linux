@@ -864,6 +864,7 @@ int iopt_get_phys(struct io_pagetable *iopt, unsigned long iova, u64 *paddr,
 		  u64 *length)
 {
 	struct iopt_area *area;
+	u64 max_length = *length;
 	u64 tmp_length = 0;
 	u64 tmp_paddr = 0;
 	int rc = 0;
@@ -891,11 +892,17 @@ int iopt_get_phys(struct io_pagetable *iopt, unsigned long iova, u64 *paddr,
 	tmp_paddr = *paddr;
 	/*
 	 * Scan the domain for the contiguous physical address length so that
-	 * userspace search can be optimized for fewer ioctls.
+	 * userspace search can be optimized for fewer ioctls. A max_length of
+	 * 0 means no limit.
 	 */
 	while (iova < iopt_area_last_iova(area)) {
 		unsigned long next_iova;
 		u64 next_paddr;
+
+		if (max_length && tmp_length >= max_length) {
+			tmp_length = max_length;
+			break;
+		}
 
 		if (check_add_overflow(iova, PAGE_SIZE, &next_iova))
 			break;
@@ -912,6 +919,9 @@ int iopt_get_phys(struct io_pagetable *iopt, unsigned long iova, u64 *paddr,
 		tmp_paddr += PAGE_SIZE;
 		tmp_length += PAGE_SIZE;
 	}
+
+	if (max_length && tmp_length > max_length)
+		tmp_length = max_length;
 	*length = tmp_length;
 
 unlock_exit:

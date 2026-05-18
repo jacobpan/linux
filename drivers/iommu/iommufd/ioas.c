@@ -393,7 +393,7 @@ int iommufd_ioas_noiommu_get_pa(struct iommufd_ucmd *ucmd)
 		return PTR_ERR(ioas);
 
 	rc = iopt_get_phys(&ioas->iopt, cmd->iova, &cmd->out_phys,
-			   &cmd->out_length);
+			   &cmd->length);
 	if (rc)
 		goto out_put;
 

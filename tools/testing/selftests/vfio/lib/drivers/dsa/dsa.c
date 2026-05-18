@@ -44,7 +44,7 @@ static iova_t iova_to_dma_addr(struct vfio_pci_device *device, iova_t iova,
 		       "IOMMU_IOAS_NOIOMMU_GET_PA failed for iova 0x%lx\n", iova);
 
        if (contig_len)
-		*contig_len = args.out_length;
+		*contig_len = args.length;
 	return args.out_phys;
 }
 
