@@ -2075,6 +2075,45 @@ TEST_F(iommufd_mock_domain, alloc_hwpt)
 	}
 }
 
+/* Test that a nest_parent paging domain without page table ops can be directly
+ * attached to a device without creating any nested domain on top of it. This
+ * simulates the L1 virtual host (L1VH) direct-attach use case where the VMM
+ * uses a nest_parent domain for device assignment without going through
+ * map/unmap domain ops (the IOAS manages the mappings).
+ */
+TEST_F(iommufd_mock_domain, attach_hwpt_nest_parent_nopt)
+{
+	int i;
+
+	for (i = 0; i != variant->mock_domains; i++) {
+		uint32_t nest_parent_hwpt_id;
+		uint32_t stdev_id;
+
+		/* Allocate a nest_parent hwpt without page table ops */
+		test_cmd_hwpt_alloc_iommupt(self->idev_ids[i], self->ioas_id,
+					    IOMMU_HWPT_ALLOC_NEST_PARENT,
+					    MOCK_IOMMUPT_NOPT,
+					    &nest_parent_hwpt_id);
+
+		/* Direct attach: create a new mock device on the nest_parent */
+		test_cmd_mock_domain(nest_parent_hwpt_id, &stdev_id, NULL,
+				     NULL);
+
+		/* Replace existing device to nest_parent hwpt */
+		test_cmd_mock_domain_replace(self->stdev_ids[i],
+					     nest_parent_hwpt_id);
+		EXPECT_ERRNO(EBUSY,
+			     _test_ioctl_destroy(self->fd,
+						 nest_parent_hwpt_id));
+
+		/* Replace back to ioas */
+		test_cmd_mock_domain_replace(self->stdev_ids[i], self->ioas_id);
+
+		test_ioctl_destroy(stdev_id);
+		test_ioctl_destroy(nest_parent_hwpt_id);
+	}
+}
+
 FIXTURE(iommufd_dirty_tracking)
 {
 	int fd;

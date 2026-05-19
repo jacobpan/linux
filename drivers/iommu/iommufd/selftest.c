@@ -393,6 +393,17 @@ static void mock_domain_free(struct iommu_domain *domain)
 	kfree(mock);
 }
 
+static void mock_domain_free_nopt(struct iommu_domain *domain)
+{
+	kfree(to_mock_domain(domain));
+}
+
+static const struct iommu_domain_ops mock_nest_parent_ops = {
+	.free = mock_domain_free_nopt,
+	.attach_dev = mock_domain_nop_attach,
+	.set_dev_pasid = mock_domain_set_dev_pasid_nop,
+};
+
 static void mock_iotlb_sync(struct iommu_domain *domain,
 				struct iommu_iotlb_gather *gather)
 {
@@ -512,6 +523,22 @@ mock_domain_alloc_paging_flags(struct device *dev, u32 flags,
 			&user_cfg, user_data, IOMMU_HWPT_DATA_SELFTEST, iotlb);
 		if (rc)
 			return ERR_PTR(rc);
+	}
+
+	/*
+	 * MOCK_IOMMUPT_NOPT with NEST_PARENT: allocate a domain without page
+	 * table ops.  This simulates L1VH direct-attach where the nest_parent
+	 * domain serves only as an anchor for nested translation.
+	 */
+	if (user_cfg.pagetable_type == MOCK_IOMMUPT_NOPT) {
+		if (!(flags & IOMMU_HWPT_ALLOC_NEST_PARENT))
+			return ERR_PTR(-EINVAL);
+		mock = kzalloc_obj(*mock);
+		if (!mock)
+			return ERR_PTR(-ENOMEM);
+		mock->domain.type = IOMMU_DOMAIN_UNMANAGED;
+		mock->domain.ops = &mock_nest_parent_ops;
+		return &mock->domain;
 	}
 
 	mock = mock_domain_alloc_pgtable(dev, &user_cfg, flags);

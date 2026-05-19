@@ -208,6 +208,16 @@ iommufd_hwpt_paging_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 			goto out_abort;
 	}
 
+	/*
+	 * A nest_parent domain without mapping ops (pgsize_bitmap == 0) is used
+	 * for L1 virtual host direct-attach scenarios where the parent domain
+	 * only serves as an anchor for nested translation. Skip adding it to
+	 * the IOAS page table so that IOAS map/unmap operations do not attempt
+	 * to program this domain.
+	 */
+	if (!hwpt->domain->pgsize_bitmap && hwpt_paging->nest_parent)
+		return hwpt_paging;
+
 	rc = iopt_table_add_domain(&ioas->iopt, hwpt->domain);
 	if (rc)
 		goto out_detach;

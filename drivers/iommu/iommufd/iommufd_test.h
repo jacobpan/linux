@@ -36,6 +36,7 @@ enum {
 enum {
 	MOCK_IOMMUPT_DEFAULT = 0,
 	MOCK_IOMMUPT_HUGE,
+	MOCK_IOMMUPT_NOPT,
 };
 
 /* These values are true for MOCK_IOMMUPT_DEFAULT */
