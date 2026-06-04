@@ -32,9 +32,10 @@ The design follows the direction from Jason Gunthorpe's feedback:
 
 * VFIO container cannot represent this model; the solution must be IOMMUFD
   based.
-* The direct attach flow should accept an FD representing the target VM
-  (for example a KVM or mshv VM FD). The driver converts that FD into the
-  hypervisor identity needed to configure DMA for that VM.
+* The direct attach flow should accept an opaque FD representing the target VM
+  (for example a KVM or mshv VM FD). IOMMUFD does not interpret the FD type;
+  the IOMMU driver converts that FD into the hypervisor identity needed to
+  configure DMA for that VM.
 * The VM identity used at the hypercall boundary must be bound to a Linux FD,
   immutable for the lifetime of the IOMMUFD object, and held by the IOMMU
   driver while the domain exists.
@@ -98,10 +99,11 @@ The important object responsibilities are:
 
 ``HWPT_NESTED``
     Attachable direct-attach domain allocated from the vIOMMU via
-    ``IOMMU_HWPT_ALLOC``. The Hyper-V driver allocates an
-    ``IOMMU_DOMAIN_NESTED`` with attach/free ops only. The domain has no
-    map/unmap ops because DMA translation is the VM's second-stage page table
-    managed by the hypervisor/VM subsystem.
+    ``IOMMU_HWPT_ALLOC``. The existing vIOMMU ``alloc_domain_nested`` callback
+    is used only as the IOMMUFD hook to create an attachable
+    ``IOMMU_DOMAIN_NESTED`` wrapper with attach/free ops. It does not allocate
+    or own a Hyper-V second-stage I/O page table. The real S2 IOPT is the VM's
+    partition/EPT/NPT context identified by the VM FD held in the vIOMMU.
 
 Baremetal Root Partition Flow
 =============================
@@ -189,8 +191,10 @@ attach.
 Step 3: Allocate a Hyper-V vIOMMU
 ---------------------------------
 
-The VMM allocates a vIOMMU using a new Hyper-V vIOMMU type. The driver-specific
-data carries an FD for the target VM.
+The VMM allocates a vIOMMU using a new Hyper-V vIOMMU type. The
+driver-specific data carries an opaque FD for the target VM. The FD type is
+private to the Hyper-V IOMMU driver and the VM subsystem; IOMMUFD only carries
+the data to the driver-specific ``viommu_init`` callback.
 
 ::
 
@@ -263,10 +267,10 @@ The VMM allocates an ``HWPT_NESTED`` from the vIOMMU. This uses the existing
     ioctl(iommufd, IOMMU_HWPT_ALLOC, &hwpt_alloc);
     direct_hwpt_id = hwpt_alloc.out_hwpt_id;
 
-The Hyper-V vIOMMU ``alloc_domain_nested`` callback allocates an
-``IOMMU_DOMAIN_NESTED`` with no map/unmap ops. It records a reference to the
-vIOMMU and obtains all VM identity through the vIOMMU object, not from raw UAPI
-fields.
+The Hyper-V vIOMMU ``alloc_domain_nested`` callback does not allocate a new
+S2 IOPT. It creates the IOMMUFD-visible ``IOMMU_DOMAIN_NESTED`` attach token
+with no map/unmap ops. That token records a reference to the vIOMMU and obtains
+the VM partition identity through the vIOMMU object, not from raw UAPI fields.
 
 Step 6: Attach the VFIO Device
 ------------------------------
@@ -327,9 +331,14 @@ needs Hyper-V-specific enum values and data structures for existing ioctls.
 
 Open UAPI points:
 
-* The exact FD type should be coordinated with the VM subsystem. It may be a
-  KVM VM FD, an mshv VM/partition FD, or a common FD abstraction if multiple
-  hypervisors share the flow.
+* IOMMUFD should not standardize or interpret the VM FD type. The FD is
+  driver-specific vIOMMU data and may be backed by mshv, KVM, or another VM
+  subsystem. The UAPI requirement is lifetime alignment: once the FD is
+  associated with a vIOMMU, the VM file/object and the vIOMMU object must remain
+  mutually valid until the association is explicitly destroyed. In particular,
+  while the associated mshv/KVM VM FD is open, the VM subsystem and IOMMU driver
+  must keep the vIOMMU object alive or otherwise force a safe detach/teardown
+  before the VM identity can disappear.
 * If Hyper-V direct attach needs output data from vIOMMU allocation, the data
   structure can follow the existing vIOMMU pattern where driver-specific data
   contains input and output fields.
@@ -340,54 +349,30 @@ Open UAPI points:
 Kernel Implementation Plan
 ==========================
 
-Phase 1: Refactor Hyper-V IOMMU Driver Skeleton
------------------------------------------------
-
-* Move Hyper-V IOMMU code under ``drivers/iommu/hyperv/``.
-* Split IRQ remapping from DMA translation/direct attach code.
-* Add a Hyper-V IOMMU driver that probes pass-through-capable devices and
-  advertises the needed IOMMUFD/vIOMMU hooks.
-* Keep baremetal mapped domains and L1VH direct attach as separate domain
-  implementations.
-
-Deliverable: no UAPI change; code organization and minimal driver skeleton.
-
-Phase 2: Baremetal HWPT_PAGING Support
---------------------------------------
-
-* Implement ``domain_alloc_paging_flags`` or ``domain_alloc_paging`` for
-  Hyper-V mapped device domains.
-* Implement real ``map_pages`` and ``unmap_pages`` callbacks that issue
-  Hyper-V map/unmap hypercalls.
-* Implement attach/detach for mapped device domains.
-* Add error unwinding for partial map/unmap failures.
-
-Deliverable: root-partition flow through IOAS, HWPT_PAGING, and VFIO device.
-
-Phase 3: VM FD Binding Helper
+Phase 1: VM FD Binding Helper
 -----------------------------
 
 * Define a helper, likely in the VM/hypervisor driver, that validates a VM FD
   and returns an immutable VM/partition handle usable by Hyper-V hypercalls.
-* The helper must take a file reference or otherwise provide a lifetime object
-  held by the IOMMU driver.
+* The helper must establish the lifetime coupling between the VM file/object and
+  the vIOMMU object. The exact FD type remains opaque to IOMMUFD.
 * Do not accept raw partition IDs from userspace for IOMMUFD direct attach.
 * Do not infer ownership from ``current``, ``tgid``, or process lifetime.
 
 Deliverable: internal kernel API for "FD -> immutable Hyper-V VM identity".
 
-Phase 4: Hyper-V vIOMMU Type
+Phase 2: Hyper-V vIOMMU Type
 ----------------------------
 
 * Add ``IOMMU_VIOMMU_TYPE_HYPERV`` and ``struct iommu_viommu_hyperv``.
 * Implement ``get_viommu_size`` and ``viommu_init``.
-* In ``viommu_init``, copy the VM FD data, validate it with the Phase 3 helper,
+* In ``viommu_init``, copy the VM FD data, validate it with the Phase 1 helper,
   and hold the VM reference for the vIOMMU lifetime.
 * Implement vIOMMU destroy to release the VM reference.
 
 Deliverable: ``IOMMU_VIOMMU_ALLOC`` creates a Hyper-V vIOMMU bound to a VM FD.
 
-Phase 5: Hyper-V vDEVICE Support
+Phase 3: Hyper-V vDEVICE Support
 --------------------------------
 
 * Implement vIOMMU ``vdevice_size`` and ``vdevice_init`` if Hyper-V needs
@@ -400,13 +385,15 @@ Phase 5: Hyper-V vDEVICE Support
 Deliverable: ``IOMMU_VDEVICE_ALLOC`` records the VM-visible identity of each
 assigned device.
 
-Phase 6: Direct-Attach HWPT_NESTED
+Phase 4: Direct-Attach HWPT_NESTED
 ----------------------------------
 
 * Add ``IOMMU_HWPT_DATA_HYPERV_DIRECT`` if an explicit direct-attach HWPT data
   type is required.
-* Implement vIOMMU ``alloc_domain_nested`` to allocate a direct-attach
-  ``IOMMU_DOMAIN_NESTED``.
+* Implement vIOMMU ``alloc_domain_nested`` as the existing IOMMUFD hook that
+  creates a direct-attach ``IOMMU_DOMAIN_NESTED`` wrapper. This wrapper must
+  not allocate or manage Hyper-V S2 IOPT state; it represents the VM partition
+  context already pinned by the vIOMMU.
 * The domain must provide ``attach_dev`` and ``free``. It must not provide
   ``map_pages`` or ``unmap_pages``.
 * ``attach_dev`` must verify that the device has a vDEVICE in the target
@@ -419,7 +406,7 @@ Phase 6: Direct-Attach HWPT_NESTED
 Deliverable: ``IOMMU_HWPT_ALLOC`` with ``pt_id = viommu_id`` returns an
 attachable direct-attach HWPT.
 
-Phase 7: VFIO Attach/Detach Integration
+Phase 5: VFIO Attach/Detach Integration
 ---------------------------------------
 
 * Use existing ``VFIO_DEVICE_ATTACH_IOMMUFD_PT`` and
@@ -432,7 +419,7 @@ Phase 7: VFIO Attach/Detach Integration
 Deliverable: VFIO cdev assigned devices can enter and leave Hyper-V direct
 attach via existing VFIO/IOMMUFD ioctls.
 
-Phase 8: Selftests and Validation
+Phase 6: Selftests and Validation
 ---------------------------------
 
 * Extend the IOMMUFD selftest mock vIOMMU to model a VM-FD-backed vIOMMU and a
@@ -453,6 +440,37 @@ Phase 8: Selftests and Validation
 
 Deliverable: selftest coverage for the IOMMUFD object model before Hyper-V
 hardware/hypercall testing is required.
+
+Phase 7: Hyper-V Driver Refactor
+--------------------------------
+
+* Move Hyper-V IOMMU code under ``drivers/iommu/hyperv/`` once the required
+  IOMMUFD UAPI and core object model are in place.
+* Split IRQ remapping from DMA translation/direct attach code.
+* Keep baremetal mapped domains and L1VH direct attach as separate domain
+  implementations.
+
+Deliverable: Hyper-V driver organization ready for the final IOMMUFD
+UAPI/object model.
+
+Phase 8: Hyper-V Root Driver UAPI Adaptation
+--------------------------------------------
+
+* Adapt the Hyper-V root IOMMU driver to the established IOMMUFD
+  vIOMMU/vDEVICE UAPI instead of shaping UAPI around the initial driver layout.
+* Implement Hyper-V ``get_viommu_size`` and ``viommu_init`` for
+  ``IOMMU_VIOMMU_TYPE_HYPERV``.
+* Implement the vIOMMU ``vdevice_init`` path if the root driver needs
+  driver-private state for the Hyper-V logical device ID.
+* Implement the vIOMMU ``alloc_domain_nested`` path as the direct attach
+  ``HWPT_NESTED`` wrapper creation path, with Hyper-V S2 IOPT selection coming
+  from the vIOMMU's pinned VM identity.
+* Wire ``attach_dev``/detach to the Hyper-V direct attach/detach hypercalls
+  using the VM identity held by the vIOMMU and the logical device ID held by
+  the vDEVICE.
+
+Deliverable: the Hyper-V root IOMMU driver supports direct attach using the
+new vIOMMU/vDEVICE based IOMMUFD UAPI.
 
 Comparison with the Previous Proposal
 =====================================
@@ -476,8 +494,9 @@ The vIOMMU design fixes both:
 Open Questions
 ==============
 
-* Which VM FD type should be standardized for Hyper-V: KVM VM FD, mshv
-  partition FD, or a small common hypervisor FD abstraction?
+* Whether any common helper is needed for drivers to pin an opaque VM FD and
+  obtain an immutable hypervisor VM identity, without exposing the FD type to
+  IOMMUFD core.
 * Should ``IOMMU_HWPT_DATA_HYPERV_DIRECT`` carry any fields, or should all
   information come from vIOMMU and vDEVICE?
 * Does Hyper-V require one direct HWPT per device, or can one direct HWPT be
