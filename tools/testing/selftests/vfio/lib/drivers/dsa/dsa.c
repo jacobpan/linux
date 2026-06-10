@@ -28,6 +28,7 @@ static iova_t iova_to_dma_addr(struct vfio_pci_device *device, iova_t iova,
 				u64 *contig_len)
 {
 	struct iommu *iommu = device->iommu;
+	long page_size = sysconf(_SC_PAGESIZE);
 	struct iommu_ioas_noiommu_get_pa args = {
 		.size    = sizeof(args),
 		.ioas_id = iommu->ioas_id,
@@ -40,10 +41,13 @@ static iova_t iova_to_dma_addr(struct vfio_pci_device *device, iova_t iova,
 		return iova;
 	}
 
+	VFIO_ASSERT_GT(page_size, 0);
+	args.length = page_size;
+
 	VFIO_ASSERT_EQ(ioctl(iommu->iommufd, IOMMU_IOAS_NOIOMMU_GET_PA, &args), 0,
 		       "IOMMU_IOAS_NOIOMMU_GET_PA failed for iova 0x%lx\n", iova);
 
-       if (contig_len)
+	if (contig_len)
 		*contig_len = args.length;
 	return args.out_phys;
 }
