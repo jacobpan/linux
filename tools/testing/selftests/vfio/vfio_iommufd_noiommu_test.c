@@ -120,16 +120,16 @@ TEST_F(vfio_noiommu, ioas_noiommu_get_pa_mapped)
 	if (ret)
 		SKIP(return, "IOMMU_IOAS_MAP failed: %s\n", strerror(-ret));
 
-	ret = __iommu_noiommu_get_pa(self->iommu, region.iova, 0, &phys,
-				     &length);
+	ret = __iommu_noiommu_get_pa(self->iommu, region.iova, region.size,
+				     &phys, &length);
 	ASSERT_EQ(0, ret);
 	ASSERT_NE(0, phys);
 	ASSERT_LE(length, region.size);
 
 	phys = 0;
 	length = 0;
-	ret = __iommu_noiommu_get_pa(self->iommu, region.iova + 0x80, 0,
-				     &phys, &length);
+	ret = __iommu_noiommu_get_pa(self->iommu, region.iova + 0x80,
+				     region.size - 0x80, &phys, &length);
 	ASSERT_EQ(0, ret);
 	ASSERT_NE(0, phys);
 	ASSERT_LE(length, region.size - 0x80);
@@ -140,16 +140,16 @@ TEST_F(vfio_noiommu, ioas_noiommu_get_pa_mapped)
 
 TEST_F(vfio_noiommu, ioas_noiommu_get_pa_unmapped_fails)
 {
-	ASSERT_NE(0, __iommu_noiommu_get_pa(self->iommu, 0x10000, 0, NULL,
+	ASSERT_NE(0, __iommu_noiommu_get_pa(self->iommu, 0x10000, 1, NULL,
 					    NULL));
 }
 
-TEST_F(vfio_noiommu, ioas_noiommu_get_pa_length_zero_no_limit)
+TEST_F(vfio_noiommu, ioas_noiommu_get_pa_length_zero_fails)
 {
 	struct dma_region region = {};
 	long page_size = sysconf(_SC_PAGESIZE);
-	u64 phys_nolimit = 0, phys_zero = 0;
-	u64 len_nolimit = 0, len_zero = 0;
+	u64 phys = 0;
+	u64 length = 0;
 	int ret;
 
 	ASSERT_GT(page_size, 0);
@@ -159,15 +159,9 @@ TEST_F(vfio_noiommu, ioas_noiommu_get_pa_length_zero_no_limit)
 	if (ret)
 		SKIP(return, "IOMMU_IOAS_MAP failed: %s\n", strerror(-ret));
 
-	ret = __iommu_noiommu_get_pa(self->iommu, region.iova, 0, &phys_zero,
-				     &len_zero);
-	ASSERT_EQ(0, ret);
-
-	ret = __iommu_noiommu_get_pa(self->iommu, region.iova, 0,
-				     &phys_nolimit, &len_nolimit);
-	ASSERT_EQ(0, ret);
-	ASSERT_EQ(phys_zero, phys_nolimit);
-	ASSERT_EQ(len_zero, len_nolimit);
+	ret = __iommu_noiommu_get_pa(self->iommu, region.iova, 0, &phys,
+				     &length);
+	ASSERT_EQ(-EINVAL, ret);
 
 	ASSERT_EQ(0, unmap_region(self->iommu, &region));
 }
@@ -188,8 +182,8 @@ TEST_F(vfio_noiommu, ioas_noiommu_get_pa_length_capped)
 	if (ret)
 		SKIP(return, "IOMMU_IOAS_MAP failed: %s\n", strerror(-ret));
 
-	ret = __iommu_noiommu_get_pa(self->iommu, region.iova, 0, &phys,
-				     &len_full);
+	ret = __iommu_noiommu_get_pa(self->iommu, region.iova, region.size,
+				     &phys, &len_full);
 	ASSERT_EQ(0, ret);
 	ASSERT_NE(0, phys);
 	ASSERT_NE(0, len_full);
