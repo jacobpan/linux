@@ -13,6 +13,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <linux/mman.h>
+#include <linux/sizes.h>
 #include <libvfio.h>
 #include "kselftest_harness.h"
 
@@ -39,13 +41,13 @@ FIXTURE_TEARDOWN(vfio_noiommu)
 		iommu_cleanup(self->iommu);
 }
 
-static int map_region(struct iommu *iommu, struct dma_region *region,
-		      iova_t iova, size_t length)
+static int map_region_flags(struct iommu *iommu, struct dma_region *region,
+			    iova_t iova, size_t length, int mmap_flags)
 {
 	int ret;
 
 	region->vaddr = mmap(NULL, length, PROT_READ | PROT_WRITE,
-			     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+			     mmap_flags, -1, 0);
 	if (region->vaddr == MAP_FAILED)
 		return -errno;
 
@@ -58,6 +60,13 @@ static int map_region(struct iommu *iommu, struct dma_region *region,
 		region->vaddr = NULL;
 	}
 	return ret;
+}
+
+static int map_region(struct iommu *iommu, struct dma_region *region,
+		      iova_t iova, size_t length)
+{
+	return map_region_flags(iommu, region, iova, length,
+				MAP_PRIVATE | MAP_ANONYMOUS);
 }
 
 static int unmap_region(struct iommu *iommu, struct dma_region *region)
@@ -134,6 +143,47 @@ TEST_F(vfio_noiommu, ioas_noiommu_get_pa_mapped)
 	ASSERT_NE(0, phys);
 	ASSERT_LE(length, region.size - 0x80);
 	ASSERT_EQ(0, (phys + length) % page_size);
+
+	ASSERT_EQ(0, unmap_region(self->iommu, &region));
+}
+
+TEST_F(vfio_noiommu, ioas_noiommu_get_pa_hugetlb)
+{
+	struct dma_region region = {};
+	const u64 hugepage_size = SZ_2M;
+	const u64 iova = SZ_2M;
+	const u64 offset = SZ_1M;
+	const u64 cap = SZ_1M / 2;
+	u64 phys = 0;
+	u64 length = 0;
+	u64 partial_phys = 0;
+	u64 partial_length = 0;
+	int ret;
+
+	ret = map_region_flags(self->iommu, &region, iova, hugepage_size,
+			       MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB |
+				       MAP_HUGE_2MB);
+	if (ret)
+		SKIP(return, "HugeTLB map failed: %s\n", strerror(-ret));
+
+	ret = __iommu_noiommu_get_pa(self->iommu, region.iova, region.size,
+				     &phys, &length);
+	ASSERT_EQ(0, ret);
+	ASSERT_NE(0, phys);
+	ASSERT_EQ(hugepage_size, length);
+
+	ret = __iommu_noiommu_get_pa(self->iommu, region.iova + offset,
+				     region.size, &partial_phys,
+				     &partial_length);
+	ASSERT_EQ(0, ret);
+	ASSERT_EQ(phys + offset, partial_phys);
+	ASSERT_EQ(hugepage_size - offset, partial_length);
+
+	ret = __iommu_noiommu_get_pa(self->iommu, region.iova + offset, cap,
+				     &partial_phys, &partial_length);
+	ASSERT_EQ(0, ret);
+	ASSERT_EQ(phys + offset, partial_phys);
+	ASSERT_EQ(cap, partial_length);
 
 	ASSERT_EQ(0, unmap_region(self->iommu, &region));
 }
