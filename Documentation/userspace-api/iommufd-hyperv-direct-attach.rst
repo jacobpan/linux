@@ -423,6 +423,111 @@ vDEVICE, then destroys the vIOMMU. Destroying the vIOMMU drops the held VM FD
 reference. The VM FD cannot be reused or retargeted to change the identity of
 an existing vIOMMU.
 
+Prototype Plan
+--------------
+
+The first prototype should prove the direct-attach object lifetime without
+depending on real Hyper-V hardware assignment. It should use the IOMMUFD
+selftest mock IOMMU driver and mock domains for the new direct HWPT path, then
+add only the minimum MSHV hack needed for a QEMU/KVM environment to obtain a
+VM-like FD for vIOMMU allocation.
+
+Phase 1: Add a temporary MSHV VM FD hook for QEMU/KVM testing
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For QEMU/KVM lifecycle testing, add a temporary MSHV-only hack that lets the
+test environment obtain a VM-like FD even when the real MSHV partition backend
+is not available. The FD only needs to satisfy the vIOMMU lifetime test: it
+must be reference-counted, identifiable as an MSHV VM object by the prototype
+validation path, and released when the vIOMMU is destroyed.
+
+The prototype hack should be explicit and easy to remove:
+
+* add a prototype-only module parameter or debug config knob, such as
+  ``mshv.fake_vm_fd=1``, and refuse the fake path unless that knob is enabled;
+* in ``mshv_parent_partition_init()``, when the host is not a Hyper-V parent
+  partition but the fake knob is enabled, still register the ``mshv`` misc
+  device and initialize only the minimal state needed by the fake path;
+* do not call Hyper-V setup helpers such as SynIC setup, VMM capability
+  discovery, root scheduler setup, or Hyper-V interrupt handler registration in
+  the fake path;
+* keep ``mshv_dev_open()`` as the trivial success path. Opening ``/dev/mshv``
+  should succeed in QEMU/KVM once the misc device has been registered;
+* add a fake ``MSHV_CREATE_PARTITION`` path that returns an anon-inode VM FD
+  without issuing ``hv_call_create_partition()``;
+* back that FD with a small fake partition object, a synthetic immutable
+  partition ID, a refcount, and file operations whose release path frees only
+  fake resources;
+* make the vIOMMU allocation prototype validate the FD through an MSHV helper
+  instead of looking up a partition from ``current`` or ``current->tgid``.
+
+The fake partition FD should model only the lifetime contract needed by
+IOMMUFD: ``get`` when the vIOMMU is allocated, ``put`` when the vIOMMU is
+destroyed, and rejection of non-MSHV FDs. It should not accept real partition
+ioctls, create VPs, map guest memory, or issue any Hyper-V hypercalls.
+
+This hook must remain clearly marked as prototype code. It must not use
+``current`` or process IDs as the VM identity for the direct attach path, and it
+must be easy to remove once the real MSHV VM FD plumbing is available.
+
+Phase 2: Add selftest-only UAPI plumbing
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Add selftest-only data types and flags under ``drivers/iommu/iommufd`` and
+``tools/testing/selftests/iommu`` for:
+
+* allocating a vIOMMU without a paging parent;
+* allocating a vIOMMU child HWPT that represents a direct-attach domain;
+* passing a mock VM FD through the vIOMMU allocation data.
+
+This phase should not add a final userspace ABI. The goal is to exercise the
+shape of ``VM fd -> vIOMMU -> vDEVICE -> direct HWPT -> VFIO attach`` while
+keeping the prototype clearly separated from the eventual Hyper-V UAPI.
+
+Phase 3: Relax IOMMUFD vIOMMU lifetime rules for the prototype
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Teach the IOMMUFD vIOMMU core to allow the selftest no-parent mode. In that
+mode the vIOMMU has no nesting-parent ``HWPT_PAGING``, so the core paths that
+create, destroy, and reference a vIOMMU must tolerate ``viommu->hwpt == NULL``.
+The relaxed path should be limited to the selftest/mock mode until the
+production Hyper-V semantics are finalized.
+
+Phase 4: Implement a mock direct HWPT
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Extend the IOMMUFD selftest mock IOMMU driver with a mock direct domain. The
+domain should be attachable, but it must not be IOAS-backed and must not support
+map or unmap operations. Device attach should validate that the physical device
+has a vDEVICE under the same vIOMMU and should consume the vDEVICE
+``virt_id`` as the VM-visible device identity.
+
+Phase 5: Add the lifecycle selftest
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Add a selftest that runs the full object flow:
+
+* create an IOMMUFD context;
+* bind a mock VFIO device and get ``dev_id``;
+* create a mock VM FD;
+* allocate a no-parent mock vIOMMU from that VM FD;
+* allocate a vDEVICE with a test ``virt_id``;
+* allocate a direct HWPT under the vIOMMU;
+* attach and detach the VFIO device to the direct HWPT;
+* destroy the direct HWPT, vDEVICE, and vIOMMU in the required order.
+
+The test should also cover rejected orderings, such as destroying the vIOMMU
+while a direct HWPT or vDEVICE still exists.
+
+Phase 6: Run the prototype in the QEMU/KVM environment
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Build the IOMMUFD selftests and run the new lifecycle test in the target
+QEMU/KVM environment. The expected result is that object creation, attach,
+detach, and teardown all succeed with the mock direct HWPT, while invalid
+lifetime orderings fail before any object is freed out from under a dependent
+object.
+
 6. UAPI Additions
 =================
 
