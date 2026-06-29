@@ -2163,7 +2163,8 @@ mshv_fake_partition_release(struct inode *inode, struct file *filp)
 {
 	struct mshv_fake_partition *partition = filp->private_data;
 
-	pr_info("mshv: release fake VM fd partition %#llx\n", partition->pt_id);
+	pr_info("mshv: release fake VM fd partition %#llx final file reference\n",
+		partition->pt_id);
 	mshv_fake_partition_put(partition);
 	return 0;
 }
