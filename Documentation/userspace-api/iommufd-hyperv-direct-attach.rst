@@ -263,12 +263,10 @@ driver-specific data carries an opaque FD for the target VM. The FD type is
 private to the MSHV IOMMU driver and the VM subsystem; IOMMUFD only carries
 the data to the driver-specific ``viommu_init`` callback.
 
-The current vIOMMU UAPI requires ``hwpt_id`` to name a nesting-parent
-``HWPT_PAGING``. MSHV direct attach should use an explicit
-``IOMMU_VIOMMU_ALLOC_NO_PAGING_PARENT`` mode for this vIOMMU type: the vIOMMU
-is still the per-VM IOMMU isolation object, but its base direct attach mode does
-not need an IOAS-backed nesting parent. ``hwpt_id`` is omitted and must be zero
-in this mode.
+``IOMMU_VIOMMU_TYPE_MSHV`` is the explicit no-nesting-parent vIOMMU
+type. The vIOMMU is still the per-VM IOMMU isolation object, but its base
+direct attach mode does not need an IOAS-backed nesting parent. ``hwpt_id`` is
+omitted and must be zero for this type.
 
 Do not pass a ``HWPT_DIRECT`` ID in ``iommu_viommu_alloc::hwpt_id``. The direct
 HWPT is allocated after the vIOMMU, under the vIOMMU, and gets the VM identity
@@ -277,17 +275,16 @@ lifetime dependency.
 
 ::
 
-    struct iommu_viommu_hyperv hv_viommu = {
+    struct iommu_viommu_mshv mshv_viommu = {
         .vm_fd = vm_fd,
     };
 
     struct iommu_viommu_alloc viommu_alloc = {
         .size = sizeof(viommu_alloc),
-        .flags = IOMMU_VIOMMU_ALLOC_NO_PAGING_PARENT,
-        .type = IOMMU_VIOMMU_TYPE_HYPERV,
+        .type = IOMMU_VIOMMU_TYPE_MSHV,
         .dev_id = dev_id,
-        .data_len = sizeof(hv_viommu),
-        .data_uptr = (uintptr_t)&hv_viommu,
+        .data_len = sizeof(mshv_viommu),
+        .data_uptr = (uintptr_t)&mshv_viommu,
     };
     ioctl(iommufd, IOMMU_VIOMMU_ALLOC, &viommu_alloc);
     viommu_id = viommu_alloc.out_viommu_id;
@@ -364,7 +361,7 @@ domain whose S2 translation is externally managed by the target VM/hypervisor.
 
 ::
 
-    struct iommu_hwpt_hyperv_direct direct = {
+    struct iommu_hwpt_mshv_direct direct = {
         .flags = 0,
     };
 
@@ -372,7 +369,7 @@ domain whose S2 translation is externally managed by the target VM/hypervisor.
         .size = sizeof(direct_alloc),
         .dev_id = dev_id,
         .pt_id = viommu_id,
-        .data_type = IOMMU_HWPT_DATA_HYPERV_DIRECT,
+        .data_type = IOMMU_HWPT_DATA_MSHV_DIRECT,
         .data_len = sizeof(direct),
         .data_uptr = (uintptr_t)&direct,
     };
@@ -418,13 +415,12 @@ Step 6: Optional Nested Translation
 
 If the target VM later needs guest-visible vIOMMU facilities or nested
 translation, that should be modeled as a real nested translation flow. It must
-not be confused with the base direct attach domain. A direct-only vIOMMU
-allocated with ``IOMMU_VIOMMU_ALLOC_NO_PAGING_PARENT`` has no nesting-parent
-``HWPT_PAGING`` for the existing ``HWPT_NESTED`` path, so nested translation
-needs either a vIOMMU allocated with a real nesting parent or a future UAPI that
-explicitly supplies a nesting parent for that flow. ``HWPT_NESTED`` remains the
-object for a guest-provided nested translation; it is not the base direct attach
-object.
+not be confused with the base direct attach domain. A direct-only
+``IOMMU_VIOMMU_TYPE_MSHV`` vIOMMU has no nesting-parent ``HWPT_PAGING`` for
+the existing ``HWPT_NESTED`` path, so nested translation needs either a vIOMMU
+allocated with a real nesting parent or a future UAPI that explicitly supplies a
+nesting parent for that flow. ``HWPT_NESTED`` remains the object for a
+guest-provided nested translation; it is not the base direct attach object.
 
 Step 7: Teardown
 ----------------
@@ -481,28 +477,27 @@ This hook must remain clearly marked as prototype code. It must not use
 ``current`` or process IDs as the VM identity for the direct attach path, and it
 must be easy to remove once the real MSHV VM FD plumbing is available.
 
-Phase 2: Add selftest-only UAPI plumbing
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Phase 2: Add MSHV vIOMMU UAPI plumbing
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Add selftest-only data types and flags under ``drivers/iommu/iommufd`` and
-``tools/testing/selftests/iommu`` for:
+Add the explicit ``IOMMU_VIOMMU_TYPE_MSHV`` UAPI type and the matching
+``struct iommu_viommu_mshv`` VM FD data. Use the IOMMUFD mock driver and
+``tools/testing/selftests/iommu`` to exercise:
 
-* allocating a vIOMMU without a paging parent;
+* allocating an MSHV vIOMMU without a paging parent;
 * allocating a vIOMMU child HWPT that represents a direct-attach domain;
 * passing a mock VM FD through the vIOMMU allocation data.
 
-This phase should not add a final userspace ABI. The goal is to exercise the
-shape of ``VM fd -> vIOMMU -> vDEVICE -> direct HWPT -> VFIO attach`` while
-keeping the prototype clearly separated from the eventual Hyper-V UAPI.
+The goal is to exercise the shape of
+``VM fd -> vIOMMU -> vDEVICE -> direct HWPT -> VFIO attach`` while using the
+same explicit vIOMMU type that the eventual MSHV root IOMMU driver will support.
 
 Phase 3: Relax IOMMUFD vIOMMU lifetime rules for the prototype
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Teach the IOMMUFD vIOMMU core to allow the selftest no-parent mode. In that
-mode the vIOMMU has no nesting-parent ``HWPT_PAGING``, so the core paths that
-create, destroy, and reference a vIOMMU must tolerate ``viommu->hwpt == NULL``.
-The relaxed path should be limited to the selftest/mock mode until the
-production Hyper-V semantics are finalized.
+Teach the IOMMUFD vIOMMU core that ``IOMMU_VIOMMU_TYPE_MSHV`` has no
+nesting-parent ``HWPT_PAGING``, so the core paths that create, destroy, and
+reference a vIOMMU must tolerate ``viommu->hwpt == NULL`` for that type.
 
 Phase 4: Implement a mock direct HWPT
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -521,7 +516,7 @@ Add a selftest that runs the full object flow:
 * create an IOMMUFD context;
 * bind a mock VFIO device and get ``dev_id``;
 * create a mock VM FD;
-* allocate a no-parent mock vIOMMU from that VM FD;
+* allocate an ``IOMMU_VIOMMU_TYPE_MSHV`` vIOMMU from that VM FD;
 * allocate a vDEVICE with a test ``virt_id``;
 * allocate a direct HWPT under the vIOMMU;
 * attach and detach the VFIO device to the direct HWPT;
@@ -552,25 +547,21 @@ is ``HWPT_DIRECT``, not ``HWPT_NESTED``.
 
     enum iommu_viommu_type {
         ...
-        IOMMU_VIOMMU_TYPE_HYPERV,
+        IOMMU_VIOMMU_TYPE_MSHV,
     };
 
-    enum iommu_viommu_alloc_flags {
-        IOMMU_VIOMMU_ALLOC_NO_PAGING_PARENT = 1 << 0,
-    };
-
-    struct iommu_viommu_hyperv {
+    struct iommu_viommu_mshv {
         __s32 vm_fd;
         __u32 flags;
-        __aligned_u64 reserved;
+        __aligned_u64 __reserved;
     };
 
     enum iommu_hwpt_data_type {
         ...
-        IOMMU_HWPT_DATA_HYPERV_DIRECT,
+        IOMMU_HWPT_DATA_MSHV_DIRECT,
     };
 
-    struct iommu_hwpt_hyperv_direct {
+    struct iommu_hwpt_mshv_direct {
         __u32 flags;
         __u32 reserved;
     };
@@ -588,14 +579,11 @@ Open UAPI points:
 * If MSHV direct attach needs output data from HWPT allocation, the
   driver-specific data structure can follow the existing vIOMMU pattern where
   driver data contains input and output fields.
-* ``IOMMU_VIOMMU_ALLOC`` currently requires a nesting-parent ``HWPT_PAGING``.
-  MSHV direct attach needs a vIOMMU mode that does not require an IOAS-backed
-  parent when the vIOMMU is used only as the per-VM isolation object for direct
-  attach. The proposed ``IOMMU_VIOMMU_ALLOC_NO_PAGING_PARENT`` flag makes that
-  explicit: if set, ``hwpt_id`` must be zero, the vIOMMU type must support a
-  missing paging parent, and the core must treat the vIOMMU's parent HWPT as
-  ``NULL``. If clear, the existing nesting-parent ``HWPT_PAGING`` requirement
-  remains.
+* ``IOMMU_VIOMMU_ALLOC`` normally requires a nesting-parent ``HWPT_PAGING``.
+  ``IOMMU_VIOMMU_TYPE_MSHV`` is the explicit exception for MSHV direct
+  attach: ``hwpt_id`` must be zero and the core passes a ``NULL`` parent domain
+  to the driver ``viommu_init`` callback. Other vIOMMU types keep the existing
+  nesting-parent ``HWPT_PAGING`` requirement.
 * A ``HWPT_DIRECT`` ID must not be accepted in ``iommu_viommu_alloc::hwpt_id``.
   ``HWPT_DIRECT`` is a child of a vIOMMU, not the parent used to create one.
 * ``IOMMU_HWPT_ALLOC`` with ``pt_id = viommu_id`` currently creates
@@ -635,15 +623,14 @@ Deliverable: internal kernel API for "FD -> immutable MSHV VM identity".
 Phase 2: MSHV vIOMMU Type
 ----------------------------
 
-* Add ``IOMMU_VIOMMU_TYPE_HYPERV`` and ``struct iommu_viommu_hyperv`` carrying
+* Add ``IOMMU_VIOMMU_TYPE_MSHV`` and ``struct iommu_viommu_mshv`` carrying
   an opaque VM FD.
-* Add ``IOMMU_VIOMMU_ALLOC_NO_PAGING_PARENT`` for direct-only vIOMMU allocation.
 * Implement ``get_viommu_size`` and ``viommu_init``.
 * In ``viommu_init``, copy the VM FD data, validate it with the Phase 1 helper,
   and hold the VM reference for the vIOMMU lifetime. The parent-domain argument
-  may be ``NULL`` when ``IOMMU_VIOMMU_ALLOC_NO_PAGING_PARENT`` is used.
+  must be ``NULL`` for ``IOMMU_VIOMMU_TYPE_MSHV``.
 * Update IOMMUFD core paths that currently assume ``viommu->hwpt`` is present:
-  no-parent vIOMMUs must not dereference a missing parent HWPT during destroy,
+  MSHV vIOMMUs must not dereference a missing parent HWPT during destroy,
   internal access attachment, or nested HWPT allocation.
 * Implement vIOMMU destroy to release the VM reference.
 
@@ -668,8 +655,8 @@ Phase 4: Direct HWPT Child of vIOMMU
 
 * Add an IOMMUFD HWPT subtype for externally managed direct domains allocated
   under a vIOMMU.
-* Add ``IOMMU_HWPT_DATA_HYPERV_DIRECT`` and
-  ``struct iommu_hwpt_hyperv_direct`` for direct-domain allocation options. The
+* Add ``IOMMU_HWPT_DATA_MSHV_DIRECT`` and
+  ``struct iommu_hwpt_mshv_direct`` for direct-domain allocation options. The
   VM FD is not repeated here; it comes from the parent vIOMMU.
 * Extend ``IOMMU_HWPT_ALLOC`` with ``pt_id = viommu_id`` so direct-domain data
   allocates ``HWPT_DIRECT`` instead of ``HWPT_NESTED``.
@@ -746,9 +733,9 @@ Phase 8: MSHV Root Driver UAPI Adaptation
   vIOMMU/vDEVICE/direct-HWPT UAPI instead of shaping UAPI around the initial
   driver layout.
 * Implement MSHV ``get_viommu_size`` and ``viommu_init`` for
-  ``IOMMU_VIOMMU_TYPE_HYPERV``.
+  ``IOMMU_VIOMMU_TYPE_MSHV``.
 * Implement MSHV externally managed domain allocation for direct HWPTs under
-  ``IOMMU_HWPT_DATA_HYPERV_DIRECT``.
+  ``IOMMU_HWPT_DATA_MSHV_DIRECT``.
 * Implement driver-private state for the MSHV logical device ID if needed by
   the vDEVICE.
 * Wire ``attach_dev``/detach to the MSHV direct attach/detach hypercalls
@@ -772,8 +759,8 @@ two problems:
 
 The vIOMMU plus direct-HWPT design fixes both:
 
-* ``IOMMU_VIOMMU_ALLOC`` carries and pins the VM FD for the vIOMMU lifetime,
-  using the no-paging-parent mode for direct-only vIOMMUs.
+* ``IOMMU_VIOMMU_ALLOC`` with ``IOMMU_VIOMMU_TYPE_MSHV`` carries and pins
+  the VM FD for the vIOMMU lifetime without a nesting parent.
 * ``IOMMU_VDEVICE_ALLOC`` carries the logical device ID under that vIOMMU.
 * ``IOMMU_HWPT_ALLOC`` from the vIOMMU produces an explicit direct HWPT, not an
   IOAS-backed paging domain and not ``HWPT_NESTED``.
@@ -781,9 +768,6 @@ The vIOMMU plus direct-HWPT design fixes both:
 9. Open Questions
 =================
 
-* Should no-paging-parent vIOMMU allocation be controlled by an explicit
-  ``IOMMU_VIOMMU_ALLOC_NO_PAGING_PARENT`` flag, as shown here, or be inferred
-  from ``IOMMU_VIOMMU_TYPE_HYPERV`` plus ``hwpt_id == 0``?
 * Should the MSHV direct attach UAPI identifiers keep the existing Hyper-V
   naming convention used by Linux interfaces, or introduce MSHV-specific names?
 * Should ``IOMMU_HWPT_ALLOC`` with ``pt_id = viommu_id`` dispatch between
