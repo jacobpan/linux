@@ -125,32 +125,43 @@ Direct attach uses a VM-FD-backed vIOMMU with a direct HWPT child::
 
 Object model diagram::
 
-     _____________________________________________________________________
-    |              iommufd (MSHV direct attach)                           |
-    |                                                                     |
-    |    [1] VM identity       [2] VM IOMMU slice                          |
-    |   _____________        __________________                            |
-    |  |             |      |                  |                           |
-    |  |    VM fd    |----->|      vIOMMU      |<------------------|       |
-    |  |_____________|      |     (vm_fd)      |                   |       |
-    |                       |__________________|                   |       |
-    |                               |                              |       |
-    |                               | [4] direct domain            |       |
-    |                               v                              |       |
-    |       [3] device id     _______________        [5] attach    |       |
-    |      ______________    |               |       __________    |       |
-    |     |              |   |  HWPT_DIRECT  |<-----|          |   |       |
-    |     |   vDEVICE    |   | (VM S2 DMA)   |      |  DEVICE  |---|       |
-    |     |  (virt_id)   |   |_______________|      |__________|           |
-    |     |______________|            |                  |                 |
-    |            ^                    |                  |                 |
-    |            |____________________|__________________|                 |
-    |_____________________________________________________________________|
-                 |                    |                  |
-           ______v______        ______v______        ____v___
-          | VM-visible  |      | direct      |      | struct |
-          | device id   |      | iommu_domain|      | device |
-          |_____________|      |_____________|      |________|
+    [1] VM identity              [2] VM IOMMU slice
+       _____________                __________________
+      |             |              |                  |
+      |    VM fd    |------------->|      vIOMMU      |
+      |_____________|              |     (vm_fd)      |
+                                   |__________________|
+                                            |
+                                            | IOMMU_VDEVICE_ALLOC
+                                            | (dev_id, virt_id)
+                                            v
+    [3] VFIO cdev FD               [4] vDEVICE link
+       ___________________            ___________________
+      |                   |   bind   |                   |
+      | /dev/vfio/... fd  |--------->| dev_id, virt_id  |
+      |___________________|          |___________________|
+                |                              |
+                | VFIO_DEVICE_BIND_IOMMUFD    | virt_id
+                | returns dev_id              v
+               v                    _____________________
+          __________                | VM-visible device |
+         |          |               | id for hypercall  |
+         |  DEVICE  |               |___________________|
+         |__________|                         |
+               |                              | attach_dev uses
+               |                              | virt_id
+               v                              v
+          ____v___                [5] Direct domain
+         | struct |                   _______________
+         | device |<-----------------|               |
+         |________|      attach      |  HWPT_DIRECT  |
+                                    | (VM S2 DMA)   |
+                                    |_______________|
+                                            |
+                                      ______v______
+                                     | direct      |
+                                     | iommu_domain|
+                                     |_____________|
 
 The important object responsibilities are:
 
