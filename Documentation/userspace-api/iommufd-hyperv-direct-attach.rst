@@ -485,21 +485,17 @@ Add the explicit ``IOMMU_VIOMMU_TYPE_MSHV`` UAPI type and the matching
 ``tools/testing/selftests/iommu`` to exercise:
 
 * allocating an MSHV vIOMMU without a paging parent;
-* allocating a vIOMMU child HWPT that represents a direct-attach domain;
 * passing a mock VM FD through the vIOMMU allocation data.
 
 The goal is to exercise the shape of
 ``VM fd -> vIOMMU -> vDEVICE -> direct HWPT -> VFIO attach`` while using the
 same explicit vIOMMU type that the eventual MSHV root IOMMU driver will support.
+This phase also teaches the IOMMUFD vIOMMU core that
+``IOMMU_VIOMMU_TYPE_MSHV`` has no nesting-parent ``HWPT_PAGING``, so the core
+paths that create, destroy, and reference a vIOMMU must tolerate
+``viommu->hwpt == NULL`` for that type.
 
-Phase 3: Relax IOMMUFD vIOMMU lifetime rules for the prototype
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Teach the IOMMUFD vIOMMU core that ``IOMMU_VIOMMU_TYPE_MSHV`` has no
-nesting-parent ``HWPT_PAGING``, so the core paths that create, destroy, and
-reference a vIOMMU must tolerate ``viommu->hwpt == NULL`` for that type.
-
-Phase 4: Implement a mock direct HWPT
+Phase 3: Implement a mock direct HWPT
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Extend the IOMMUFD selftest mock IOMMU driver with a mock direct domain. The
@@ -508,7 +504,7 @@ map or unmap operations. Device attach should validate that the physical device
 has a vDEVICE under the same vIOMMU and should consume the vDEVICE
 ``virt_id`` as the VM-visible device identity.
 
-Phase 5: Add the lifecycle selftest
+Phase 4: Add the lifecycle selftest
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Add a selftest that runs the full object flow:
@@ -525,7 +521,7 @@ Add a selftest that runs the full object flow:
 The test should also cover rejected orderings, such as destroying the vIOMMU
 while a direct HWPT or vDEVICE still exists.
 
-Phase 6: Run the prototype in the QEMU/KVM environment
+Phase 5: Run the prototype in the QEMU/KVM environment
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Build the IOMMUFD selftests and run the new lifecycle test in the target
