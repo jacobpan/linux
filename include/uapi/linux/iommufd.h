@@ -1052,6 +1052,7 @@ struct iommu_fault_alloc {
  * @IOMMU_VIOMMU_TYPE_ARM_SMMUV3: ARM SMMUv3 driver specific type
  * @IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV: NVIDIA Tegra241 CMDQV (extension for ARM
  *                                    SMMUv3) enabled ARM SMMUv3 type
+ * @IOMMU_VIOMMU_TYPE_MSHV: Microsoft Hypervisor type
  */
 enum iommu_viommu_type {
 	IOMMU_VIOMMU_TYPE_DEFAULT = 0,
@@ -1062,6 +1063,7 @@ enum iommu_viommu_type {
 	 *   VMM must wire the HYP_OWN bit to 0 in guest VINTF_CONFIG register
 	 */
 	IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV = 2,
+	IOMMU_VIOMMU_TYPE_MSHV = 3,
 };
 
 /**
@@ -1081,12 +1083,26 @@ struct iommu_viommu_tegra241_cmdqv {
 };
 
 /**
+ * struct iommu_viommu_mshv - Microsoft Hypervisor Virtual IOMMU
+ *                            (IOMMU_VIOMMU_TYPE_MSHV)
+ * @vm_fd: MSHV VM file descriptor
+ * @flags: Must be 0
+ * @__reserved: Must be 0
+ */
+struct iommu_viommu_mshv {
+	__s32 vm_fd;
+	__u32 flags;
+	__aligned_u64 __reserved;
+};
+
+/**
  * struct iommu_viommu_alloc - ioctl(IOMMU_VIOMMU_ALLOC)
  * @size: sizeof(struct iommu_viommu_alloc)
  * @flags: Must be 0
  * @type: Type of the virtual IOMMU. Must be defined in enum iommu_viommu_type
  * @dev_id: The device's physical IOMMU will be used to back the virtual IOMMU
- * @hwpt_id: ID of a nesting parent HWPT to associate to
+ * @hwpt_id: ID of a nesting parent HWPT to associate to, or 0 if the vIOMMU
+ *           type does not use a nesting parent
  * @out_viommu_id: Output virtual IOMMU ID for the allocated object
  * @data_len: Length of the type specific data
  * @__reserved: Must be 0

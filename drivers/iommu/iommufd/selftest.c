@@ -144,6 +144,7 @@ to_mock_nested(struct iommu_domain *domain)
 struct mock_viommu {
 	struct iommufd_viommu core;
 	struct mock_iommu_domain *s2_parent;
+	struct file *vm_file;
 	struct mock_hw_queue *hw_queue[IOMMU_TEST_HW_QUEUE_MAX];
 	struct mutex queue_mutex;
 
@@ -605,7 +606,15 @@ static void mock_viommu_destroy(struct iommufd_viommu *viommu)
 	if (mock_viommu->mmap_offset)
 		iommufd_viommu_destroy_mmap(&mock_viommu->core,
 					    mock_viommu->mmap_offset);
-	free_pages((unsigned long)mock_viommu->page, 1);
+	if (mock_viommu->page)
+		free_pages((unsigned long)mock_viommu->page, 1);
+	if (mock_viommu->vm_file) {
+		pr_info("iommufd selftest: MSHV viommu destroy drops pinned vm_file=%p\n",
+			mock_viommu->vm_file);
+		fput(mock_viommu->vm_file);
+		pr_info("iommufd selftest: MSHV viommu dropped pinned vm_file=%p\n",
+			mock_viommu->vm_file);
+	}
 	mutex_destroy(&mock_viommu->queue_mutex);
 
 	/* iommufd core frees mock_viommu and viommu */
@@ -783,7 +792,8 @@ static struct iommufd_viommu_ops mock_viommu_ops = {
 static size_t mock_get_viommu_size(struct device *dev,
 				   enum iommu_viommu_type viommu_type)
 {
-	if (viommu_type != IOMMU_VIOMMU_TYPE_SELFTEST)
+	if (viommu_type != IOMMU_VIOMMU_TYPE_SELFTEST &&
+	    viommu_type != IOMMU_VIOMMU_TYPE_MSHV)
 		return 0;
 	return VIOMMU_STRUCT_SIZE(struct mock_viommu, core);
 }
@@ -795,10 +805,32 @@ static int mock_viommu_init(struct iommufd_viommu *viommu,
 	struct mock_iommu_device *mock_iommu = container_of(
 		viommu->iommu_dev, struct mock_iommu_device, iommu_dev);
 	struct mock_viommu *mock_viommu = to_mock_viommu(viommu);
-	struct iommu_viommu_selftest data;
+	struct iommu_viommu_selftest data = {};
 	int rc;
 
-	if (user_data) {
+	if (viommu->type == IOMMU_VIOMMU_TYPE_MSHV) {
+		struct iommu_viommu_mshv mshv = {};
+
+		if (!user_data)
+			return -EINVAL;
+
+		rc = iommu_copy_struct_from_user(&mshv, user_data,
+						 IOMMU_VIOMMU_TYPE_MSHV,
+						 vm_fd);
+		if (rc)
+			return rc;
+		if (mshv.flags || mshv.__reserved)
+			return -EOPNOTSUPP;
+
+		mock_viommu->vm_file = fget(mshv.vm_fd);
+		if (!mock_viommu->vm_file)
+			return -EBADF;
+		pr_info("iommufd selftest: MSHV viommu init type=%u vm_fd=%d vm_file=%p has_hwpt_paging=%u\n",
+			viommu->type, mshv.vm_fd, mock_viommu->vm_file,
+			!!parent_domain);
+		pr_info("iommufd selftest: MSHV viommu pins vm_file=%p, userspace close waits for viommu destroy\n",
+			mock_viommu->vm_file);
+	} else if (user_data) {
 		rc = iommu_copy_struct_from_user(
 			&data, user_data, IOMMU_VIOMMU_TYPE_SELFTEST, out_data);
 		if (rc)
@@ -807,8 +839,10 @@ static int mock_viommu_init(struct iommufd_viommu *viommu,
 		/* Allocate two pages */
 		mock_viommu->page =
 			(u32 *)__get_free_pages(GFP_KERNEL | __GFP_ZERO, 1);
-		if (!mock_viommu->page)
-			return -ENOMEM;
+		if (!mock_viommu->page) {
+			rc = -ENOMEM;
+			goto err_put_vm_file;
+		}
 
 		rc = iommufd_viommu_alloc_mmap(&mock_viommu->core,
 					       __pa(mock_viommu->page),
@@ -830,7 +864,8 @@ static int mock_viommu_init(struct iommufd_viommu *viommu,
 
 	refcount_inc(&mock_iommu->users);
 	mutex_init(&mock_viommu->queue_mutex);
-	mock_viommu->s2_parent = to_mock_domain(parent_domain);
+	if (parent_domain)
+		mock_viommu->s2_parent = to_mock_domain(parent_domain);
 
 	viommu->ops = &mock_viommu_ops;
 	return 0;
@@ -840,6 +875,11 @@ err_destroy_mmap:
 				    mock_viommu->mmap_offset);
 err_free_page:
 	free_pages((unsigned long)mock_viommu->page, 1);
+err_put_vm_file:
+	if (mock_viommu->vm_file) {
+		fput(mock_viommu->vm_file);
+		mock_viommu->vm_file = NULL;
+	}
 	return rc;
 }
 

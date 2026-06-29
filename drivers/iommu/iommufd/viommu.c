@@ -3,15 +3,25 @@
  */
 #include "iommufd_private.h"
 
+static bool iommufd_viommu_has_paging_parent(enum iommu_viommu_type type)
+{
+	return type != IOMMU_VIOMMU_TYPE_MSHV;
+}
+
 void iommufd_viommu_destroy(struct iommufd_object *obj)
 {
 	struct iommufd_viommu *viommu =
 		container_of(obj, struct iommufd_viommu, obj);
 
+	pr_info("iommufd: viommu destroy begin id=%u type=%u has_hwpt_paging=%u\n",
+		viommu->obj.id, viommu->type, !!viommu->hwpt);
 	if (viommu->ops && viommu->ops->destroy)
 		viommu->ops->destroy(viommu);
-	refcount_dec(&viommu->hwpt->common.obj.users);
+	if (viommu->hwpt)
+		refcount_dec(&viommu->hwpt->common.obj.users);
 	xa_destroy(&viommu->vdevs);
+	pr_info("iommufd: viommu destroy complete id=%u type=%u\n",
+		viommu->obj.id, viommu->type);
 }
 
 int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
@@ -26,11 +36,19 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 	struct iommufd_viommu *viommu;
 	struct iommufd_device *idev;
 	const struct iommu_ops *ops;
+	bool has_hwpt_paging;
 	size_t viommu_size;
 	int rc;
 
 	if (cmd->flags || cmd->type == IOMMU_VIOMMU_TYPE_DEFAULT)
 		return -EOPNOTSUPP;
+
+	has_hwpt_paging = iommufd_viommu_has_paging_parent(cmd->type);
+	pr_info("iommufd: viommu alloc request dev_id=%u type=%u hwpt_id=%u has_hwpt_paging=%u flags=0x%x data_len=%u\n",
+		cmd->dev_id, cmd->type, cmd->hwpt_id, has_hwpt_paging,
+		cmd->flags, cmd->data_len);
+	if (!has_hwpt_paging && cmd->hwpt_id)
+		return -EINVAL;
 
 	idev = iommufd_get_device(ucmd, cmd->dev_id);
 	if (IS_ERR(idev))
@@ -57,15 +75,19 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 		goto out_put_idev;
 	}
 
-	hwpt_paging = iommufd_get_hwpt_paging(ucmd, cmd->hwpt_id);
-	if (IS_ERR(hwpt_paging)) {
-		rc = PTR_ERR(hwpt_paging);
-		goto out_put_idev;
-	}
+	if (has_hwpt_paging) {
+		hwpt_paging = iommufd_get_hwpt_paging(ucmd, cmd->hwpt_id);
+		if (IS_ERR(hwpt_paging)) {
+			rc = PTR_ERR(hwpt_paging);
+			goto out_put_idev;
+		}
 
-	if (!hwpt_paging->nest_parent) {
-		rc = -EINVAL;
-		goto out_put_hwpt;
+		if (!hwpt_paging->nest_parent) {
+			rc = -EINVAL;
+			goto out_put_hwpt;
+		}
+	} else {
+		hwpt_paging = NULL;
 	}
 
 	viommu = (struct iommufd_viommu *)_iommufd_object_alloc_ucmd(
@@ -79,7 +101,8 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 	viommu->type = cmd->type;
 	viommu->ictx = ucmd->ictx;
 	viommu->hwpt = hwpt_paging;
-	refcount_inc(&viommu->hwpt->common.obj.users);
+	if (viommu->hwpt)
+		refcount_inc(&viommu->hwpt->common.obj.users);
 	INIT_LIST_HEAD(&viommu->veventqs);
 	init_rwsem(&viommu->veventqs_rwsem);
 	/*
@@ -89,7 +112,8 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 	 */
 	viommu->iommu_dev = __iommu_get_iommu_dev(idev->dev);
 
-	rc = ops->viommu_init(viommu, hwpt_paging->common.domain,
+	rc = ops->viommu_init(viommu,
+			      hwpt_paging ? hwpt_paging->common.domain : NULL,
 			      user_data.len ? &user_data : NULL);
 	if (rc)
 		goto out_put_hwpt;
@@ -102,9 +126,13 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 
 	cmd->out_viommu_id = viommu->obj.id;
 	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+	if (!rc)
+		pr_info("iommufd: viommu alloc complete id=%u type=%u has_hwpt_paging=%u\n",
+			cmd->out_viommu_id, cmd->type, has_hwpt_paging);
 
 out_put_hwpt:
-	iommufd_put_object(ucmd->ictx, &hwpt_paging->common.obj);
+	if (hwpt_paging)
+		iommufd_put_object(ucmd->ictx, &hwpt_paging->common.obj);
 out_put_idev:
 	iommufd_put_object(ucmd->ictx, &idev->obj);
 	return rc;
