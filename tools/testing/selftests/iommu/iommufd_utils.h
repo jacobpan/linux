@@ -242,6 +242,20 @@ static int _test_cmd_hwpt_alloc(int fd, __u32 device_id, __u32 pt_id, __u32 ft_i
 		     _test_cmd_hwpt_alloc(self->fd, device_id, pt_id, 0, flags, \
 					  hwpt_id, data_type, data, data_len))
 
+#define test_cmd_hwpt_alloc_direct(device_id, viommu_id, hwpt_id, data,        \
+				   data_len)                                  \
+	ASSERT_EQ(0, _test_cmd_hwpt_alloc(self->fd, device_id, viommu_id, 0,   \
+					  0, hwpt_id,                        \
+					  IOMMU_HWPT_DATA_DIRECT, data,      \
+					  data_len))
+#define test_err_hwpt_alloc_direct(_errno, device_id, viommu_id, flags,        \
+				   hwpt_id, data, data_len)                   \
+	EXPECT_ERRNO(_errno,                                                 \
+		     _test_cmd_hwpt_alloc(self->fd, device_id, viommu_id, 0, \
+					  flags, hwpt_id,                    \
+					  IOMMU_HWPT_DATA_DIRECT, data,      \
+					  data_len))
+
 #define test_cmd_hwpt_alloc_iopf(device_id, pt_id, fault_id, flags, hwpt_id,    \
 				   data_type, data, data_len)                   \
 	ASSERT_EQ(0, _test_cmd_hwpt_alloc(self->fd, device_id, pt_id, fault_id, \

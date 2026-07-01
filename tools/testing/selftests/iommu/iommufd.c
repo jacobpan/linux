@@ -3059,6 +3059,79 @@ TEST_F(iommufd_viommu, viommu_survives_mshv_fd_close)
 	close(mshv_fd);
 }
 
+TEST_F(iommufd_viommu, viommu_alloc_mshv_direct_hwpt)
+{
+	struct iommu_viommu_mshv viommu_data = {};
+	struct iommu_hwpt_direct direct = {};
+	struct iommu_hwpt_selftest nested = {
+		.iotlb = IOMMU_TEST_IOTLB_DEFAULT,
+	};
+	struct mshv_create_partition args = {};
+	uint32_t direct_hwpt_id;
+	uint32_t nested_hwpt_id;
+	uint32_t viommu_id;
+	uint32_t vdev_id;
+	int mshv_fd;
+	int vm_fd;
+
+	if (!self->device_id)
+		SKIP(return, "Skipping test for variant no_viommu");
+
+	/* DIRECT is only implemented for the MSHV/no-parent vIOMMU. */
+	test_err_hwpt_alloc_direct(EOPNOTSUPP, self->device_id,
+				   self->viommu_id, 0, &direct_hwpt_id,
+				   &direct, sizeof(direct));
+
+	mshv_fd = open("/dev/mshv", O_RDWR | O_CLOEXEC);
+	if (mshv_fd < 0) {
+		if (errno == ENOENT || errno == ENODEV)
+			SKIP(return, "Skipping test because /dev/mshv is unavailable");
+		ASSERT_NE(-1, mshv_fd);
+	}
+
+	vm_fd = ioctl(mshv_fd, MSHV_CREATE_PARTITION, &args);
+	ASSERT_NE(-1, vm_fd);
+	viommu_data.vm_fd = vm_fd;
+
+	ASSERT_EQ(0, _test_cmd_viommu_alloc(self->fd, self->device_id, 0, 0,
+					    IOMMU_VIOMMU_TYPE_MSHV,
+					    &viommu_data, sizeof(viommu_data),
+					    &viommu_id));
+
+	test_err_hwpt_alloc_nested(EINVAL, self->device_id, viommu_id, 0,
+				   &nested_hwpt_id, IOMMU_HWPT_DATA_SELFTEST,
+				   &nested, sizeof(nested));
+	test_err_hwpt_alloc_direct(EINVAL, self->device_id, viommu_id, 0,
+				   &direct_hwpt_id, &direct, 0);
+	test_err_hwpt_alloc_direct(EFAULT, self->device_id, viommu_id, 0,
+				   &direct_hwpt_id, NULL, sizeof(direct));
+	test_err_hwpt_alloc_direct(EOPNOTSUPP, self->device_id, viommu_id,
+				   IOMMU_HWPT_ALLOC_PASID, &direct_hwpt_id,
+				   &direct, sizeof(direct));
+	direct.flags = 1;
+	test_err_hwpt_alloc_direct(EOPNOTSUPP, self->device_id, viommu_id, 0,
+				   &direct_hwpt_id, &direct, sizeof(direct));
+	direct.flags = 0;
+
+	test_cmd_hwpt_alloc_direct(self->device_id, viommu_id, &direct_hwpt_id,
+				   &direct, sizeof(direct));
+	EXPECT_ERRNO(EBUSY, _test_ioctl_destroy(self->fd, viommu_id));
+
+	/* Direct attach requires a vDEVICE under the same vIOMMU. */
+	test_err_mock_domain_replace(ENOENT, self->stdev_id, direct_hwpt_id);
+
+	test_cmd_vdevice_alloc(viommu_id, self->device_id, 0x99, &vdev_id);
+	test_cmd_mock_domain_replace(self->stdev_id, direct_hwpt_id);
+	EXPECT_ERRNO(EBUSY, _test_ioctl_destroy(self->fd, direct_hwpt_id));
+
+	test_cmd_mock_domain_replace(self->stdev_id, self->ioas_id);
+	test_ioctl_destroy(direct_hwpt_id);
+	test_ioctl_destroy(vdev_id);
+	test_ioctl_destroy(viommu_id);
+	close(vm_fd);
+	close(mshv_fd);
+}
+
 TEST_F(iommufd_viommu, vdevice_alloc)
 {
 	uint32_t viommu_id = self->viommu_id;

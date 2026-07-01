@@ -27,6 +27,7 @@ static struct dentry *dbgfs_root;
 static struct platform_device *selftest_iommu_dev;
 static const struct iommu_ops mock_ops;
 static struct iommu_domain_ops domain_nested_ops;
+static struct iommu_domain_ops domain_direct_ops;
 
 size_t iommufd_test_memory_limit = 65536;
 
@@ -141,6 +142,17 @@ to_mock_nested(struct iommu_domain *domain)
 	return container_of(domain, struct mock_iommu_domain_nested, domain);
 }
 
+struct mock_iommu_domain_direct {
+	struct iommu_domain domain;
+	struct mock_viommu *mock_viommu;
+};
+
+static inline struct mock_iommu_domain_direct *
+to_mock_direct(struct iommu_domain *domain)
+{
+	return container_of(domain, struct mock_iommu_domain_direct, domain);
+}
+
 struct mock_viommu {
 	struct iommufd_viommu core;
 	struct mock_iommu_domain *s2_parent;
@@ -230,6 +242,12 @@ static int mock_domain_nop_attach(struct iommu_domain *domain,
 			if (rc)
 				return rc;
 		}
+	} else if (domain->type == IOMMU_DOMAIN_DIRECT) {
+		new_viommu = to_mock_direct(domain)->mock_viommu;
+		rc = iommufd_viommu_get_vdev_id(&new_viommu->core, dev,
+						&vdev_id);
+		if (rc)
+			return rc;
 	}
 	if (new_viommu != mdev->viommu) {
 		down_write(&mdev->viommu_rwsem);
@@ -637,6 +655,40 @@ mock_viommu_alloc_domain_nested(struct iommufd_viommu *viommu, u32 flags,
 	return &mock_nested->domain;
 }
 
+static struct iommu_domain *
+mock_viommu_alloc_domain_direct(struct iommufd_viommu *viommu, u32 flags,
+				const struct iommu_user_data *user_data)
+{
+	struct mock_iommu_domain_direct *mock_direct;
+	struct iommu_hwpt_direct data = {};
+	int rc;
+
+	if (viommu->type != IOMMU_VIOMMU_TYPE_MSHV)
+		return ERR_PTR(-EOPNOTSUPP);
+	if (flags)
+		return ERR_PTR(-EOPNOTSUPP);
+	if (user_data->type != IOMMU_HWPT_DATA_DIRECT)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	rc = iommu_copy_struct_from_user(&data, user_data,
+					 IOMMU_HWPT_DATA_DIRECT, flags);
+	if (rc)
+		return ERR_PTR(rc);
+	if (data.flags || data.__reserved)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	mock_direct = kzalloc_obj(*mock_direct);
+	if (!mock_direct)
+		return ERR_PTR(-ENOMEM);
+
+	mock_direct->domain.ops = &domain_direct_ops;
+	mock_direct->domain.type = IOMMU_DOMAIN_DIRECT;
+	mock_direct->mock_viommu = to_mock_viommu(viommu);
+	pr_info("iommufd selftest: direct domain allocated viommu_id=%u\n",
+		viommu->obj.id);
+	return &mock_direct->domain;
+}
+
 static int mock_viommu_cache_invalidate(struct iommufd_viommu *viommu,
 					struct iommu_user_data_array *array)
 {
@@ -784,6 +836,7 @@ unlock:
 static struct iommufd_viommu_ops mock_viommu_ops = {
 	.destroy = mock_viommu_destroy,
 	.alloc_domain_nested = mock_viommu_alloc_domain_nested,
+	.alloc_domain_direct = mock_viommu_alloc_domain_direct,
 	.cache_invalidate = mock_viommu_cache_invalidate,
 	.get_hw_queue_size = mock_viommu_get_hw_queue_size,
 	.hw_queue_init_phys = mock_hw_queue_init_phys,
@@ -908,6 +961,11 @@ static void mock_domain_free_nested(struct iommu_domain *domain)
 	kfree(to_mock_nested(domain));
 }
 
+static void mock_domain_free_direct(struct iommu_domain *domain)
+{
+	kfree(to_mock_direct(domain));
+}
+
 static int
 mock_domain_cache_invalidate_user(struct iommu_domain *domain,
 				  struct iommu_user_data_array *array)
@@ -961,6 +1019,11 @@ static struct iommu_domain_ops domain_nested_ops = {
 	.attach_dev = mock_domain_nop_attach,
 	.cache_invalidate_user = mock_domain_cache_invalidate_user,
 	.set_dev_pasid = mock_domain_set_dev_pasid_nop,
+};
+
+static struct iommu_domain_ops domain_direct_ops = {
+	.free = mock_domain_free_direct,
+	.attach_dev = mock_domain_nop_attach,
 };
 
 static inline struct iommufd_hw_pagetable *
@@ -1836,7 +1899,8 @@ iommufd_get_hwpt(struct iommufd_ucmd *ucmd, u32 id)
 	if (IS_ERR(pt_obj))
 		return ERR_CAST(pt_obj);
 
-	if (pt_obj->type != IOMMUFD_OBJ_HWPT_NESTED &&
+	if (pt_obj->type != IOMMUFD_OBJ_HWPT_DIRECT &&
+	    pt_obj->type != IOMMUFD_OBJ_HWPT_NESTED &&
 	    pt_obj->type != IOMMUFD_OBJ_HWPT_PAGING) {
 		iommufd_put_object(ucmd->ictx, pt_obj);
 		return ERR_PTR(-EINVAL);
