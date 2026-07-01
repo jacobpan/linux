@@ -1069,7 +1069,7 @@ struct iommu_fault_alloc {
  * @IOMMU_VIOMMU_TYPE_ARM_SMMUV3: ARM SMMUv3 driver specific type
  * @IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV: NVIDIA Tegra241 CMDQV (extension for ARM
  *                                    SMMUv3) enabled ARM SMMUv3 type
- * @IOMMU_VIOMMU_TYPE_MSHV: Microsoft Hypervisor type
+ * @IOMMU_VIOMMU_TYPE_DIRECT: Direct attach type
  */
 enum iommu_viommu_type {
 	IOMMU_VIOMMU_TYPE_DEFAULT = 0,
@@ -1080,7 +1080,7 @@ enum iommu_viommu_type {
 	 *   VMM must wire the HYP_OWN bit to 0 in guest VINTF_CONFIG register
 	 */
 	IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV = 2,
-	IOMMU_VIOMMU_TYPE_MSHV = 3,
+	IOMMU_VIOMMU_TYPE_DIRECT = 3,
 };
 
 /**
@@ -1100,13 +1100,13 @@ struct iommu_viommu_tegra241_cmdqv {
 };
 
 /**
- * struct iommu_viommu_mshv - Microsoft Hypervisor Virtual IOMMU
- *                            (IOMMU_VIOMMU_TYPE_MSHV)
- * @vm_fd: MSHV VM file descriptor
+ * struct iommu_viommu_direct - Direct attach virtual IOMMU
+ *                            (IOMMU_VIOMMU_TYPE_DIRECT)
+ * @vm_fd: Type-1 hypervisor VM file descriptor
  * @flags: Must be 0
  * @__reserved: Must be 0
  */
-struct iommu_viommu_mshv {
+struct iommu_viommu_direct {
 	__s32 vm_fd;
 	__u32 flags;
 	__aligned_u64 __reserved;

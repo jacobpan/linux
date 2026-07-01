@@ -663,7 +663,7 @@ mock_viommu_alloc_domain_direct(struct iommufd_viommu *viommu, u32 flags,
 	struct iommu_hwpt_direct data = {};
 	int rc;
 
-	if (viommu->type != IOMMU_VIOMMU_TYPE_MSHV)
+	if (viommu->type != IOMMU_VIOMMU_TYPE_DIRECT)
 		return ERR_PTR(-EOPNOTSUPP);
 	if (flags)
 		return ERR_PTR(-EOPNOTSUPP);
@@ -846,7 +846,7 @@ static size_t mock_get_viommu_size(struct device *dev,
 				   enum iommu_viommu_type viommu_type)
 {
 	if (viommu_type != IOMMU_VIOMMU_TYPE_SELFTEST &&
-	    viommu_type != IOMMU_VIOMMU_TYPE_MSHV)
+	    viommu_type != IOMMU_VIOMMU_TYPE_DIRECT)
 		return 0;
 	return VIOMMU_STRUCT_SIZE(struct mock_viommu, core);
 }
@@ -861,27 +861,27 @@ static int mock_viommu_init(struct iommufd_viommu *viommu,
 	struct iommu_viommu_selftest data = {};
 	int rc;
 
-	if (viommu->type == IOMMU_VIOMMU_TYPE_MSHV) {
-		struct iommu_viommu_mshv mshv = {};
+	if (viommu->type == IOMMU_VIOMMU_TYPE_DIRECT) {
+		struct iommu_viommu_direct direct = {};
 
 		if (!user_data)
 			return -EINVAL;
 
-		rc = iommu_copy_struct_from_user(&mshv, user_data,
-						 IOMMU_VIOMMU_TYPE_MSHV,
+		rc = iommu_copy_struct_from_user(&direct, user_data,
+						 IOMMU_VIOMMU_TYPE_DIRECT,
 						 vm_fd);
 		if (rc)
 			return rc;
-		if (mshv.flags || mshv.__reserved)
+		if (direct.flags || direct.__reserved)
 			return -EOPNOTSUPP;
 
-		mock_viommu->vm_file = fget(mshv.vm_fd);
+		mock_viommu->vm_file = fget(direct.vm_fd);
 		if (!mock_viommu->vm_file)
 			return -EBADF;
-		pr_info("iommufd selftest: MSHV viommu init type=%u vm_fd=%d vm_file=%p has_hwpt_paging=%u\n",
-			viommu->type, mshv.vm_fd, mock_viommu->vm_file,
+		pr_info("iommufd selftest: direct viommu init type=%u vm_fd=%d vm_file=%p has_hwpt_paging=%u\n",
+			viommu->type, direct.vm_fd, mock_viommu->vm_file,
 			!!parent_domain);
-		pr_info("iommufd selftest: MSHV viommu pins vm_file=%p, userspace close waits for viommu destroy\n",
+		pr_info("iommufd selftest: direct viommu pins vm_file=%p, userspace close waits for viommu destroy\n",
 			mock_viommu->vm_file);
 	} else if (user_data) {
 		rc = iommu_copy_struct_from_user(

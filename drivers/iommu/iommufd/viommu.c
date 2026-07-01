@@ -5,7 +5,7 @@
 
 static bool iommufd_viommu_has_paging_parent(enum iommu_viommu_type type)
 {
-	return type != IOMMU_VIOMMU_TYPE_MSHV;
+	return type != IOMMU_VIOMMU_TYPE_DIRECT;
 }
 
 void iommufd_viommu_destroy(struct iommufd_object *obj)

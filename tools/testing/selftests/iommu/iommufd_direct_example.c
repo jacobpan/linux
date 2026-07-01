@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Standalone VMM-oriented example for MSHV direct attach via IOMMUFD.
+ * Standalone VMM-oriented example for direct attach via IOMMUFD.
  *
  * Build from the kernel tree with:
- *   make -C tools/testing/selftests/iommu iommufd_mshv_direct_example
+ *   make -C tools/testing/selftests/iommu iommufd_direct_example
  *
  * Run as:
- *   ./iommufd_mshv_direct_example /dev/vfio/devices/vfioN <logical-device-id>
+ *   ./iommufd_direct_example /dev/vfio/devices/vfioN <logical-device-id>
  *
- * The logical device ID is the VM-visible MSHV device identifier that the
+ * The logical device ID is the VM-visible device identifier that the type-1
  * hypervisor expects when the IOMMU driver performs direct attach.
  */
 #define __EXPORTED_HEADERS__
@@ -95,18 +95,18 @@ static int create_mshv_partition(int *mshv_fd, int *vm_fd)
 	return 0;
 }
 
-static int alloc_mshv_viommu(int iommufd, uint32_t dev_id, int vm_fd,
+static int alloc_direct_viommu(int iommufd, uint32_t dev_id, int vm_fd,
 			     uint32_t *viommu_id)
 {
-	struct iommu_viommu_mshv mshv = {
+	struct iommu_viommu_direct direct = {
 		.vm_fd = vm_fd,
 	};
 	struct iommu_viommu_alloc alloc = {
 		.size = sizeof(alloc),
-		.type = IOMMU_VIOMMU_TYPE_MSHV,
+		.type = IOMMU_VIOMMU_TYPE_DIRECT,
 		.dev_id = dev_id,
-		.data_len = sizeof(mshv),
-		.data_uptr = (uintptr_t)&mshv,
+		.data_len = sizeof(direct),
+		.data_uptr = (uintptr_t)&direct,
 	};
 	int rc;
 
@@ -231,7 +231,7 @@ int main(int argc, char *argv[])
 	if (rc)
 		goto out;
 
-	rc = alloc_mshv_viommu(iommufd, dev_id, vm_fd, &viommu_id);
+	rc = alloc_direct_viommu(iommufd, dev_id, vm_fd, &viommu_id);
 	if (rc)
 		goto out;
 
@@ -249,7 +249,7 @@ int main(int argc, char *argv[])
 		goto out;
 	attached = 1;
 
-	printf("MSHV direct attach established:\n");
+	printf("Direct attach established:\n");
 	printf("  dev_id=%" PRIu32 "\n", dev_id);
 	printf("  viommu_id=%" PRIu32 "\n", viommu_id);
 	printf("  vdevice_id=%" PRIu32 " virt_id=%" PRIu64 "\n",

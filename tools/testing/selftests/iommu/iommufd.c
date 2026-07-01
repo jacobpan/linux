@@ -2885,11 +2885,11 @@ TEST_F(iommufd_viommu, viommu_negative_tests)
 				      NULL);
 		test_ioctl_destroy(hwpt_id);
 
-		/* Negative test -- MSHV vIOMMU cannot name a parent hwpt */
+		/* Negative test -- direct vIOMMU cannot name a parent hwpt */
 		EXPECT_ERRNO(EINVAL,
 			     _test_cmd_viommu_alloc(self->fd, device_id,
 						    self->hwpt_id, 0,
-						    IOMMU_VIOMMU_TYPE_MSHV,
+						    IOMMU_VIOMMU_TYPE_DIRECT,
 						    NULL, 0, NULL));
 
 		/* Negative test -- unsupported viommu flag */
@@ -2987,9 +2987,9 @@ TEST_F(iommufd_viommu, viommu_alloc_with_data)
 	munmap(test, data.out_mmap_length);
 }
 
-TEST_F(iommufd_viommu, viommu_alloc_mshv)
+TEST_F(iommufd_viommu, viommu_alloc_direct)
 {
-	struct iommu_viommu_mshv data = {};
+	struct iommu_viommu_direct data = {};
 	struct mshv_create_partition args = {};
 	uint32_t viommu_id;
 	uint32_t vdev_id;
@@ -3011,7 +3011,7 @@ TEST_F(iommufd_viommu, viommu_alloc_mshv)
 	data.vm_fd = vm_fd;
 
 	ASSERT_EQ(0, _test_cmd_viommu_alloc(self->fd, self->device_id, 0, 0,
-					    IOMMU_VIOMMU_TYPE_MSHV, &data,
+					    IOMMU_VIOMMU_TYPE_DIRECT, &data,
 					    sizeof(data), &viommu_id));
 
 	test_cmd_vdevice_alloc(viommu_id, self->device_id, 0x99, &vdev_id);
@@ -3022,9 +3022,9 @@ TEST_F(iommufd_viommu, viommu_alloc_mshv)
 	close(mshv_fd);
 }
 
-TEST_F(iommufd_viommu, viommu_survives_mshv_fd_close)
+TEST_F(iommufd_viommu, viommu_survives_direct_vm_fd_close)
 {
-	struct iommu_viommu_mshv data = {};
+	struct iommu_viommu_direct data = {};
 	struct mshv_create_partition args = {};
 	uint32_t viommu_id;
 	uint32_t vdev_id;
@@ -3046,7 +3046,7 @@ TEST_F(iommufd_viommu, viommu_survives_mshv_fd_close)
 	data.vm_fd = vm_fd;
 
 	ASSERT_EQ(0, _test_cmd_viommu_alloc(self->fd, self->device_id, 0, 0,
-					    IOMMU_VIOMMU_TYPE_MSHV, &data,
+					    IOMMU_VIOMMU_TYPE_DIRECT, &data,
 					    sizeof(data), &viommu_id));
 	test_cmd_vdevice_alloc(viommu_id, self->device_id, 0x99, &vdev_id);
 
@@ -3059,9 +3059,9 @@ TEST_F(iommufd_viommu, viommu_survives_mshv_fd_close)
 	close(mshv_fd);
 }
 
-TEST_F(iommufd_viommu, viommu_alloc_mshv_direct_hwpt)
+TEST_F(iommufd_viommu, viommu_alloc_direct_hwpt)
 {
-	struct iommu_viommu_mshv viommu_data = {};
+	struct iommu_viommu_direct viommu_data = {};
 	struct iommu_hwpt_direct direct = {};
 	struct iommu_hwpt_selftest nested = {
 		.iotlb = IOMMU_TEST_IOTLB_DEFAULT,
@@ -3077,7 +3077,7 @@ TEST_F(iommufd_viommu, viommu_alloc_mshv_direct_hwpt)
 	if (!self->device_id)
 		SKIP(return, "Skipping test for variant no_viommu");
 
-	/* DIRECT is only implemented for the MSHV/no-parent vIOMMU. */
+	/* DIRECT is only implemented for the DIRECT/no-parent vIOMMU. */
 	test_err_hwpt_alloc_direct(EOPNOTSUPP, self->device_id,
 				   self->viommu_id, 0, &direct_hwpt_id,
 				   &direct, sizeof(direct));
@@ -3094,7 +3094,7 @@ TEST_F(iommufd_viommu, viommu_alloc_mshv_direct_hwpt)
 	viommu_data.vm_fd = vm_fd;
 
 	ASSERT_EQ(0, _test_cmd_viommu_alloc(self->fd, self->device_id, 0, 0,
-					    IOMMU_VIOMMU_TYPE_MSHV,
+					    IOMMU_VIOMMU_TYPE_DIRECT,
 					    &viommu_data, sizeof(viommu_data),
 					    &viommu_id));
 
