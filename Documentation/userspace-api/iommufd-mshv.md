@@ -427,6 +427,25 @@ an existing vIOMMU.
 
 ### Prototype Plan
 
+#### Test Env
+
+The prototype test environment uses a Buildroot rootfs from:
+
+`/home/panj/src/buildroot/buildroot/output/images/rootfs.cpio`
+
+After each update to the IOMMUFD test code or example program used by the
+guest, build the test as a static binary, install it into the Buildroot target
+root, and rebuild the Buildroot image:
+
+```bash
+cp <static-test-binary> /home/panj/src/buildroot/buildroot/output/target/usr/bin/
+cd /home/panj/src/buildroot/buildroot
+make -j `nproc`
+```
+
+This keeps the guest-visible `/usr/bin/` copy in sync with the kernel tree
+test code before running QEMU-based prototype validation.
+
 The first prototype should prove the direct-attach object lifetime without
 depending on real Hyper-V hardware assignment. It should use the IOMMUFD
 selftest mock IOMMU driver and mock domains for the new direct HWPT path, then
