@@ -361,7 +361,7 @@ domain whose S2 translation is externally managed by the target VM/hypervisor.
 
 ::
 
-    struct iommu_hwpt_mshv_direct direct = {
+    struct iommu_hwpt_direct direct = {
         .flags = 0,
     };
 
@@ -369,7 +369,7 @@ domain whose S2 translation is externally managed by the target VM/hypervisor.
         .size = sizeof(direct_alloc),
         .dev_id = dev_id,
         .pt_id = viommu_id,
-        .data_type = IOMMU_HWPT_DATA_MSHV_DIRECT,
+        .data_type = IOMMU_HWPT_DATA_DIRECT,
         .data_len = sizeof(direct),
         .data_uptr = (uintptr_t)&direct,
     };
@@ -487,15 +487,34 @@ Add the explicit ``IOMMU_VIOMMU_TYPE_MSHV`` UAPI type and the matching
 * allocating an MSHV vIOMMU without a paging parent;
 * passing a mock VM FD through the vIOMMU allocation data.
 
-The goal is to exercise the shape of
-``VM fd -> vIOMMU -> vDEVICE -> direct HWPT -> VFIO attach`` while using the
-same explicit vIOMMU type that the eventual MSHV root IOMMU driver will support.
-This phase also teaches the IOMMUFD vIOMMU core that
+The goal is to exercise the VM-FD-backed vIOMMU allocation while using the same
+explicit vIOMMU type that the eventual MSHV root IOMMU driver will support. The
+vDEVICE, direct HWPT, and VFIO attach pieces are added by later phases. This
+phase also teaches the IOMMUFD vIOMMU core that
 ``IOMMU_VIOMMU_TYPE_MSHV`` has no nesting-parent ``HWPT_PAGING``, so the core
 paths that create, destroy, and reference a vIOMMU must tolerate
 ``viommu->hwpt == NULL`` for that type.
 
-Phase 3: Implement a mock direct HWPT
+Phase 3.1: Add direct HWPT UAPI plumbing and allocation selftest
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Add the initial direct-HWPT UAPI and IOMMUFD core plumbing without yet
+implementing the full mock direct attach behavior. This phase should cover:
+
+* adding ``IOMMU_HWPT_DATA_DIRECT`` and ``struct iommu_hwpt_direct``;
+* extending ``IOMMU_HWPT_ALLOC`` so ``pt_id = viommu_id`` can select a direct
+  HWPT allocation path instead of the existing nested-domain path;
+* adding the minimal IOMMUFD object/lifetime plumbing needed for a direct HWPT
+  to hold a reference to its parent vIOMMU;
+* adding selftest coverage for allocation success and rejection cases, including
+  wrong vIOMMU type, unsupported flags, bad data length/type, and vIOMMU
+  lifetime protection while a direct HWPT exists.
+
+This phase is only about proving the UAPI/core object shape. The mock direct
+domain does not need to implement attach behavior yet, and VFIO attach remains
+for later phases.
+
+Phase 3.2: Implement a mock direct HWPT
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Extend the IOMMUFD selftest mock IOMMU driver with a mock direct domain. The
@@ -554,12 +573,12 @@ is ``HWPT_DIRECT``, not ``HWPT_NESTED``.
 
     enum iommu_hwpt_data_type {
         ...
-        IOMMU_HWPT_DATA_MSHV_DIRECT,
+        IOMMU_HWPT_DATA_DIRECT,
     };
 
-    struct iommu_hwpt_mshv_direct {
+    struct iommu_hwpt_direct {
         __u32 flags;
-        __u32 reserved;
+        __u32 __reserved;
     };
 
 Open UAPI points:
@@ -651,9 +670,9 @@ Phase 4: Direct HWPT Child of vIOMMU
 
 * Add an IOMMUFD HWPT subtype for externally managed direct domains allocated
   under a vIOMMU.
-* Add ``IOMMU_HWPT_DATA_MSHV_DIRECT`` and
-  ``struct iommu_hwpt_mshv_direct`` for direct-domain allocation options. The
-  VM FD is not repeated here; it comes from the parent vIOMMU.
+* Add ``IOMMU_HWPT_DATA_DIRECT`` and ``struct iommu_hwpt_direct`` for
+  direct-domain allocation options. The VM FD is not repeated here; it comes
+  from the parent vIOMMU.
 * Extend ``IOMMU_HWPT_ALLOC`` with ``pt_id = viommu_id`` so direct-domain data
   allocates ``HWPT_DIRECT`` instead of ``HWPT_NESTED``.
 * Add a vIOMMU op such as ``alloc_domain_direct``. Do not reuse
@@ -731,7 +750,7 @@ Phase 8: MSHV Root Driver UAPI Adaptation
 * Implement MSHV ``get_viommu_size`` and ``viommu_init`` for
   ``IOMMU_VIOMMU_TYPE_MSHV``.
 * Implement MSHV externally managed domain allocation for direct HWPTs under
-  ``IOMMU_HWPT_DATA_MSHV_DIRECT``.
+  ``IOMMU_HWPT_DATA_DIRECT``.
 * Implement driver-private state for the MSHV logical device ID if needed by
   the vDEVICE.
 * Wire ``attach_dev``/detach to the MSHV direct attach/detach hypercalls

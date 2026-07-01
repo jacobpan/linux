@@ -949,6 +949,7 @@ static int iommufd_device_change_pt(struct iommufd_device *idev,
 		return PTR_ERR(pt_obj);
 
 	switch (pt_obj->type) {
+	case IOMMUFD_OBJ_HWPT_DIRECT:
 	case IOMMUFD_OBJ_HWPT_NESTED:
 	case IOMMUFD_OBJ_HWPT_PAGING: {
 		struct iommufd_hw_pagetable *hwpt =
@@ -989,8 +990,8 @@ out_put_pt_obj:
  * iommufd_device_attach - Connect a device/pasid to an iommu_domain
  * @idev: device to attach
  * @pasid: pasid to attach
- * @pt_id: Input a IOMMUFD_OBJ_IOAS, or IOMMUFD_OBJ_HWPT_PAGING
- *         Output the IOMMUFD_OBJ_HWPT_PAGING ID
+ * @pt_id: Input a IOMMUFD_OBJ_IOAS, IOMMUFD_OBJ_HWPT_PAGING, or
+ *         IOMMUFD_OBJ_HWPT_DIRECT. Output the HWPT ID
  *
  * This connects the device/pasid to an iommu_domain, either automatically
  * or manually selected. Once this completes the device could do DMA with
@@ -1022,8 +1023,8 @@ EXPORT_SYMBOL_NS_GPL(iommufd_device_attach, "IOMMUFD");
  * iommufd_device_replace - Change the device/pasid's iommu_domain
  * @idev: device to change
  * @pasid: pasid to change
- * @pt_id: Input a IOMMUFD_OBJ_IOAS, or IOMMUFD_OBJ_HWPT_PAGING
- *         Output the IOMMUFD_OBJ_HWPT_PAGING ID
+ * @pt_id: Input a IOMMUFD_OBJ_IOAS, IOMMUFD_OBJ_HWPT_PAGING, or
+ *         IOMMUFD_OBJ_HWPT_DIRECT. Output the HWPT ID
  *
  * This is the same as::
  *

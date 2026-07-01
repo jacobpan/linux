@@ -475,17 +475,30 @@ struct iommu_hwpt_amd_guest {
 };
 
 /**
+ * struct iommu_hwpt_direct - Direct attach domain
+ *			      (IOMMU_HWPT_DATA_DIRECT)
+ * @flags: Must be 0
+ * @__reserved: Must be 0
+ */
+struct iommu_hwpt_direct {
+	__u32 flags;
+	__u32 __reserved;
+};
+
+/**
  * enum iommu_hwpt_data_type - IOMMU HWPT Data Type
  * @IOMMU_HWPT_DATA_NONE: no data
  * @IOMMU_HWPT_DATA_VTD_S1: Intel VT-d stage-1 page table
  * @IOMMU_HWPT_DATA_ARM_SMMUV3: ARM SMMUv3 Context Descriptor Table
  * @IOMMU_HWPT_DATA_AMD_GUEST: AMD IOMMU guest page table
+ * @IOMMU_HWPT_DATA_DIRECT: Externally managed direct domain
  */
 enum iommu_hwpt_data_type {
 	IOMMU_HWPT_DATA_NONE = 0,
 	IOMMU_HWPT_DATA_VTD_S1 = 1,
 	IOMMU_HWPT_DATA_ARM_SMMUV3 = 2,
 	IOMMU_HWPT_DATA_AMD_GUEST = 3,
+	IOMMU_HWPT_DATA_DIRECT = 4,
 };
 
 /**
@@ -519,6 +532,10 @@ enum iommu_hwpt_data_type {
  * I/O page table type supported by the underlying IOMMU hardware. The device
  * via @dev_id and the vIOMMU via @pt_id must be associated to the same IOMMU
  * instance.
+ *
+ * An externally managed direct HWPT can be created from a given vIOMMU via
+ * @pt_id. In this case, @data_type selects the direct domain type, such as
+ * IOMMU_HWPT_DATA_DIRECT, and the created HWPT is not IOAS-backed.
  *
  * If the @data_type is set to IOMMU_HWPT_DATA_NONE, @data_len and
  * @data_uptr should be zero. Otherwise, both @data_len and @data_uptr
