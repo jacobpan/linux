@@ -3911,6 +3911,12 @@ static void intel_iommu_direct_domain_free(struct iommu_domain *domain)
 	kfree(domain);
 }
 
+/*
+ * This is only a QEMU plumbing shim for IOMMUFD direct HWPT testing. Keep the
+ * domain type distinct for the UAPI flow, but reuse the existing pass-through
+ * programming until a real hypervisor-backed direct attach implementation
+ * exists.
+ */
 static const struct iommu_domain_ops intel_direct_domain_ops = {
 	.attach_dev = identity_domain_attach_dev,
 	.free = intel_iommu_direct_domain_free,
