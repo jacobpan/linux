@@ -16,13 +16,14 @@
 #include <linux/crash_dump.h>
 #include <linux/dma-direct.h>
 #include <linux/dmi.h>
+#include <linux/file.h>
+#include <linux/iommufd.h>
 #include <linux/memory.h>
 #include <linux/pci.h>
 #include <linux/pci-ats.h>
 #include <linux/spinlock.h>
 #include <linux/syscore_ops.h>
 #include <linux/tboot.h>
-#include <uapi/linux/iommufd.h>
 
 #include "iommu.h"
 #include "../dma-iommu.h"
@@ -48,9 +49,27 @@
 static void __init check_tylersburg_isoch(void);
 static int intel_iommu_set_dirty_tracking(struct iommu_domain *domain,
 					  bool enable);
+static size_t intel_iommu_get_viommu_size(struct device *dev,
+					  enum iommu_viommu_type viommu_type);
+static int intel_iommu_viommu_init(struct iommufd_viommu *viommu,
+				   struct iommu_domain *parent_domain,
+				   const struct iommu_user_data *user_data);
 static int rwbf_quirk;
 
 #define rwbf_required(iommu)	(rwbf_quirk || cap_rwbf((iommu)->cap))
+
+struct intel_iommu_viommu {
+	struct iommufd_viommu core;
+	struct file *vm_file;
+};
+
+static const struct iommufd_viommu_ops intel_direct_viommu_ops;
+
+static struct intel_iommu_viommu *
+to_intel_iommu_viommu(struct iommufd_viommu *viommu)
+{
+	return container_of(viommu, struct intel_iommu_viommu, core);
+}
 
 /*
  * set to 1 to panic kernel if can't successfully enable VT-d
@@ -3887,6 +3906,103 @@ static struct iommu_domain identity_domain = {
 	},
 };
 
+static void intel_iommu_direct_domain_free(struct iommu_domain *domain)
+{
+	kfree(domain);
+}
+
+/*
+ * This is only a QEMU plumbing shim for IOMMUFD direct HWPT testing. Keep the
+ * domain type distinct for the UAPI flow, but reuse the existing pass-through
+ * programming until a real hypervisor-backed direct attach implementation
+ * exists.
+ */
+static const struct iommu_domain_ops intel_direct_domain_ops = {
+	.attach_dev = identity_domain_attach_dev,
+	.free = intel_iommu_direct_domain_free,
+};
+
+static struct iommu_domain *
+intel_iommu_alloc_domain_direct(struct iommufd_viommu *viommu, u32 flags,
+				const struct iommu_user_data *user_data)
+{
+	struct iommu_hwpt_direct direct = {};
+	struct iommu_domain *domain;
+	int ret;
+
+	if (viommu->type != IOMMU_VIOMMU_TYPE_DIRECT)
+		return ERR_PTR(-EOPNOTSUPP);
+	if (flags)
+		return ERR_PTR(-EOPNOTSUPP);
+	if (!user_data || user_data->type != IOMMU_HWPT_DATA_DIRECT)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	ret = iommu_copy_struct_from_user(&direct, user_data,
+					  IOMMU_HWPT_DATA_DIRECT, flags);
+	if (ret)
+		return ERR_PTR(ret);
+	if (direct.flags || direct.__reserved)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	domain = kzalloc_obj(*domain, GFP_KERNEL_ACCOUNT);
+	if (!domain)
+		return ERR_PTR(-ENOMEM);
+
+	domain->type = IOMMU_DOMAIN_DIRECT;
+	domain->ops = &intel_direct_domain_ops;
+	return domain;
+}
+
+static void intel_iommu_viommu_destroy(struct iommufd_viommu *viommu)
+{
+	struct intel_iommu_viommu *intel_viommu =
+		to_intel_iommu_viommu(viommu);
+
+	fput(intel_viommu->vm_file);
+}
+
+static const struct iommufd_viommu_ops intel_direct_viommu_ops = {
+	.destroy = intel_iommu_viommu_destroy,
+	.alloc_domain_direct = intel_iommu_alloc_domain_direct,
+};
+
+static size_t intel_iommu_get_viommu_size(struct device *dev,
+					  enum iommu_viommu_type viommu_type)
+{
+	if (viommu_type != IOMMU_VIOMMU_TYPE_DIRECT)
+		return 0;
+	return VIOMMU_STRUCT_SIZE(struct intel_iommu_viommu, core);
+}
+
+static int intel_iommu_viommu_init(struct iommufd_viommu *viommu,
+				   struct iommu_domain *parent_domain,
+				   const struct iommu_user_data *user_data)
+{
+	struct intel_iommu_viommu *intel_viommu =
+		to_intel_iommu_viommu(viommu);
+	struct iommu_viommu_direct direct = {};
+	int ret;
+
+	if (viommu->type != IOMMU_VIOMMU_TYPE_DIRECT)
+		return -EOPNOTSUPP;
+	if (parent_domain || !user_data)
+		return -EINVAL;
+
+	ret = iommu_copy_struct_from_user(&direct, user_data,
+					  IOMMU_VIOMMU_TYPE_DIRECT, vm_fd);
+	if (ret)
+		return ret;
+	if (direct.flags || direct.__reserved)
+		return -EOPNOTSUPP;
+
+	intel_viommu->vm_file = fget(direct.vm_fd);
+	if (!intel_viommu->vm_file)
+		return -EBADF;
+
+	viommu->ops = &intel_direct_viommu_ops;
+	return 0;
+}
+
 const struct iommu_domain_ops intel_fs_paging_domain_ops = {
 	IOMMU_PT_DOMAIN_OPS(x86_64),
 	.attach_dev = intel_iommu_attach_device,
@@ -3926,6 +4042,8 @@ const struct iommu_ops intel_iommu_ops = {
 	.is_attach_deferred	= intel_iommu_is_attach_deferred,
 	.def_domain_type	= device_def_domain_type,
 	.page_response		= intel_iommu_page_response,
+	.get_viommu_size	= intel_iommu_get_viommu_size,
+	.viommu_init		= intel_iommu_viommu_init,
 };
 
 static void quirk_iommu_igfx(struct pci_dev *dev)
