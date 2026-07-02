@@ -179,6 +179,29 @@ static int detach_iommufd_pt(int vfio_fd)
 			"VFIO_DEVICE_DETACH_IOMMUFD_PT");
 }
 
+static void print_direct_attach_ids(uint64_t logical_device_id,
+				    uint32_t vfio_cdev_device_id,
+				    uint32_t viommu_id, uint32_t vdevice_id,
+				    uint32_t direct_hwpt_id)
+{
+	printf("Direct attach established:\n");
+	printf("  logical_device_id=%" PRIu64
+	       " (user provided VM-visible device ID)\n",
+	       logical_device_id);
+	printf("  vfio_cdev_device_id=%" PRIu32
+	       " (kernel-managed IOMMUFD device ID from VFIO cdev bind)\n",
+	       vfio_cdev_device_id);
+	printf("  viommu_id=%" PRIu32
+	       " (kernel-managed IOMMUFD vIOMMU object ID)\n",
+	       viommu_id);
+	printf("  vdevice_id=%" PRIu32
+	       " (kernel-managed IOMMUFD vDEVICE object ID)\n",
+	       vdevice_id);
+	printf("  direct_hwpt_id=%" PRIu32
+	       " (kernel-managed IOMMUFD direct HWPT object ID)\n",
+	       direct_hwpt_id);
+}
+
 static void usage(const char *argv0)
 {
 	fprintf(stderr, "Usage: %s /dev/vfio/devices/vfioN <logical-device-id>\n",
@@ -249,12 +272,8 @@ int main(int argc, char *argv[])
 		goto out;
 	attached = 1;
 
-	printf("Direct attach established:\n");
-	printf("  dev_id=%" PRIu32 "\n", dev_id);
-	printf("  viommu_id=%" PRIu32 "\n", viommu_id);
-	printf("  vdevice_id=%" PRIu32 " virt_id=%" PRIu64 "\n",
-	       vdevice_id, logical_device_id);
-	printf("  direct_hwpt_id=%" PRIu32 "\n", direct_hwpt_id);
+	print_direct_attach_ids(logical_device_id, dev_id, viommu_id,
+				vdevice_id, direct_hwpt_id);
 
 out:
 	if (attached) {
