@@ -2191,6 +2191,29 @@ u64 mshv_current_partid(void)
 }
 EXPORT_SYMBOL_GPL(mshv_current_partid);
 
+u64 mshv_partition_file_get_partid(struct file *file)
+{
+	if (!file)
+		return HV_PARTITION_ID_INVALID;
+
+	if (file->f_op == &mshv_partition_fops) {
+		struct mshv_partition *partition = file->private_data;
+
+		return partition ? partition->pt_id : HV_PARTITION_ID_INVALID;
+	}
+
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
+	if (file->f_op == &mshv_fake_partition_fops) {
+		struct mshv_fake_partition *partition = file->private_data;
+
+		return partition ? partition->pt_id : HV_PARTITION_ID_INVALID;
+	}
+#endif
+
+	return HV_PARTITION_ID_INVALID;
+}
+EXPORT_SYMBOL_GPL(mshv_partition_file_get_partid);
+
 static int
 add_partition(struct mshv_partition *partition)
 {
