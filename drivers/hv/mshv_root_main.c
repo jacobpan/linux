@@ -11,6 +11,7 @@
 #include <linux/entry-virt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/atomic.h>
 #include <linux/fs.h>
 #include <linux/miscdevice.h>
 #include <linux/slab.h>
@@ -53,7 +54,26 @@ static bool hv_no_movbl_pgs;	/* disable movable pages completely */
 module_param(hv_no_movbl_pgs, bool, 0644);
 MODULE_PARM_DESC(hv_no_movbl_pgs, "If set, don't do movable pages for VMs");
 
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
+static bool mshv_fake_vm_fd = 1;
+module_param_named(fake_vm_fd, mshv_fake_vm_fd, bool, 0400);
+MODULE_PARM_DESC(fake_vm_fd,
+		 "Enable fake MSHV VM fds for IOMMUFD direct attach prototype testing");
+#else
+#define mshv_fake_vm_fd false
+#endif
+
 struct mshv_root mshv_root;
+
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
+static bool mshv_fake_mode;
+static atomic64_t mshv_fake_next_partition_id = ATOMIC64_INIT(1);
+
+struct mshv_fake_partition {
+	u64 pt_id;
+	refcount_t pt_ref_count;
+};
+#endif
 
 enum hv_scheduler_type hv_scheduler_type;
 
@@ -68,6 +88,9 @@ static int mshv_vp_release(struct inode *inode, struct file *filp);
 static long mshv_vp_ioctl(struct file *filp, unsigned int ioctl, unsigned long arg);
 static int mshv_partition_release(struct inode *inode, struct file *filp);
 static long mshv_partition_ioctl(struct file *filp, unsigned int ioctl, unsigned long arg);
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
+static int mshv_fake_partition_release(struct inode *inode, struct file *filp);
+#endif
 static int mshv_vp_mmap(struct file *file, struct vm_area_struct *vma);
 static vm_fault_t mshv_vp_fault(struct vm_fault *vmf);
 static int mshv_init_async_handler(struct mshv_partition *partition);
@@ -97,6 +120,14 @@ static const struct file_operations mshv_partition_fops = {
 	.unlocked_ioctl = mshv_partition_ioctl,
 	.llseek = noop_llseek,
 };
+
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
+static const struct file_operations mshv_fake_partition_fops = {
+	.owner = THIS_MODULE,
+	.release = mshv_fake_partition_release,
+	.llseek = noop_llseek,
+};
+#endif
 
 static const struct file_operations mshv_dev_fops = {
 	.owner = THIS_MODULE,
@@ -2116,6 +2147,29 @@ mshv_partition_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
+static void
+mshv_fake_partition_put(struct mshv_fake_partition *partition)
+{
+	if (refcount_dec_and_test(&partition->pt_ref_count)) {
+		pr_info("mshv: destroy fake VM fd partition %#llx\n",
+			partition->pt_id);
+		kfree(partition);
+	}
+}
+
+static int
+mshv_fake_partition_release(struct inode *inode, struct file *filp)
+{
+	struct mshv_fake_partition *partition = filp->private_data;
+
+	pr_info("mshv: release fake VM fd partition %#llx final file reference\n",
+		partition->pt_id);
+	mshv_fake_partition_put(partition);
+	return 0;
+}
+#endif
+
 /* Given a process tgid, return partition id if it is a VMM process */
 u64 mshv_current_partid(void)
 {
@@ -2136,6 +2190,29 @@ u64 mshv_current_partid(void)
 	return ret_ptid;
 }
 EXPORT_SYMBOL_GPL(mshv_current_partid);
+
+u64 mshv_partition_file_get_partid(struct file *file)
+{
+	if (!file)
+		return HV_PARTITION_ID_INVALID;
+
+	if (file->f_op == &mshv_partition_fops) {
+		struct mshv_partition *partition = file->private_data;
+
+		return partition ? partition->pt_id : HV_PARTITION_ID_INVALID;
+	}
+
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
+	if (file->f_op == &mshv_fake_partition_fops) {
+		struct mshv_fake_partition *partition = file->private_data;
+
+		return partition ? partition->pt_id : HV_PARTITION_ID_INVALID;
+	}
+#endif
+
+	return HV_PARTITION_ID_INVALID;
+}
+EXPORT_SYMBOL_GPL(mshv_partition_file_get_partid);
 
 static int
 add_partition(struct mshv_partition *partition)
@@ -2333,18 +2410,75 @@ out:
 	return ret;
 }
 
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
+static long
+mshv_ioctl_create_fake_partition(void __user *user_arg,
+				 struct device *module_dev)
+{
+	union hv_partition_isolation_properties isolation_properties;
+	struct hv_partition_creation_properties creation_properties;
+	struct mshv_fake_partition *partition;
+	u64 creation_flags;
+	long ret;
+
+	ret = mshv_ioctl_process_pt_flags(user_arg, &creation_flags,
+					  &creation_properties,
+					  &isolation_properties);
+	if (ret)
+		return ret;
+
+	partition = kzalloc_obj(*partition);
+	if (!partition)
+		return -ENOMEM;
+
+	partition->pt_id = BIT_ULL(63) |
+			   (u64)atomic64_inc_return(&mshv_fake_next_partition_id);
+	refcount_set(&partition->pt_ref_count, 1);
+
+	dev_info(module_dev, "mshv: create fake VM fd partition %#llx\n",
+		 partition->pt_id);
+
+	ret = FD_ADD(O_CLOEXEC, anon_inode_getfile("mshv_fake_partition",
+						   &mshv_fake_partition_fops,
+						   partition, O_RDWR));
+	if (ret < 0) {
+		dev_info(module_dev,
+			 "mshv: failed to create fake VM fd partition %#llx: %ld\n",
+			 partition->pt_id, ret);
+		kfree(partition);
+		return ret;
+	}
+
+	return ret;
+}
+#endif
+
 static long mshv_dev_ioctl(struct file *filp, unsigned int ioctl,
 			   unsigned long arg)
 {
 	struct miscdevice *misc = filp->private_data;
+	void __user *user_arg = (void __user *)arg;
+
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
+	if (mshv_fake_mode) {
+		switch (ioctl) {
+		case MSHV_CREATE_PARTITION:
+			return mshv_ioctl_create_fake_partition(user_arg,
+								misc->this_device);
+		case MSHV_ROOT_HVCALL:
+			return -EOPNOTSUPP;
+		}
+
+		return -ENOTTY;
+	}
+#endif
 
 	switch (ioctl) {
 	case MSHV_CREATE_PARTITION:
-		return mshv_ioctl_create_partition((void __user *)arg,
-						misc->this_device);
+		return mshv_ioctl_create_partition(user_arg, misc->this_device);
 	case MSHV_ROOT_HVCALL:
 		return mshv_ioctl_passthru_hvcall(NULL, false,
-					(void __user *)arg);
+						  user_arg);
 	}
 
 	return -ENOTTY;
@@ -2353,12 +2487,20 @@ static long mshv_dev_ioctl(struct file *filp, unsigned int ioctl,
 static int
 mshv_dev_open(struct inode *inode, struct file *filp)
 {
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
+	if (mshv_fake_mode)
+		pr_info("mshv: open fake /dev/mshv fd\n");
+#endif
 	return 0;
 }
 
 static int
 mshv_dev_release(struct inode *inode, struct file *filp)
 {
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
+	if (mshv_fake_mode)
+		pr_info("mshv: release fake /dev/mshv fd\n");
+#endif
 	return 0;
 }
 
@@ -2564,14 +2706,44 @@ static int __init mshv_init_vmm_caps(struct device *dev)
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
+static int __init mshv_fake_parent_partition_init(void)
+{
+	int ret;
+
+	spin_lock_init(&mshv_root.pt_ht_lock);
+	hash_init(mshv_root.pt_htable);
+
+	mshv_fake_mode = true;
+
+	ret = misc_register(&mshv_dev);
+	if (ret) {
+		mshv_fake_mode = false;
+		return ret;
+	}
+
+	dev_warn(mshv_dev.this_device,
+		 "registered fake VM FD prototype mode; Hyper-V calls disabled\n");
+	return 0;
+}
+#endif
+
 static int __init mshv_parent_partition_init(void)
 {
 	int ret;
 	struct device *dev;
 	union hv_hypervisor_version_info version_info;
 
-	if (!hv_parent_partition() || is_kdump_kernel())
+	if (is_kdump_kernel())
 		return -ENODEV;
+
+	if (!hv_parent_partition()) {
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
+		if (mshv_fake_vm_fd)
+			return mshv_fake_parent_partition_init();
+#endif
+		return -ENODEV;
+	}
 
 	if (hv_get_hypervisor_version(&version_info))
 		return -ENODEV;
@@ -2634,6 +2806,13 @@ device_deregister:
 
 static void __exit mshv_parent_partition_exit(void)
 {
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
+	if (mshv_fake_mode) {
+		misc_deregister(&mshv_dev);
+		return;
+	}
+#endif
+
 	hv_setup_mshv_handler(NULL);
 	mshv_port_table_fini();
 	mshv_debugfs_exit();
