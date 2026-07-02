@@ -6,6 +6,8 @@
 
 #include <linux/pci.h>
 #include <linux/dma-map-ops.h>
+#include <linux/file.h>
+#include <linux/iommufd.h>
 #include <linux/interval_tree.h>
 #include <linux/hyperv.h>
 #include "dma-iommu.h"
@@ -38,13 +40,26 @@ static struct iommu_device hv_virt_iommu;
 struct hv_domain {
 	struct iommu_domain iommu_dom;
 	u32 domid_num;			      /* as opposed to domain_id.type */
-	bool attached_dom;		      /* is this direct attached dom? */
-	u64 partid;			      /* partition id */
+	u64 partid;			      /* partition id for direct attach */
 	spinlock_t mappings_lock;	      /* protects mappings_tree */
 	struct rb_root_cached mappings_tree;  /* iova to pa lookup tree */
 };
 
 #define to_hv_domain(d) container_of(d, struct hv_domain, iommu_dom)
+
+struct hv_iommu_viommu {
+	struct iommufd_viommu core;
+	struct file *vm_file;
+	u64 partid;
+};
+
+static const struct iommufd_viommu_ops hv_iommu_direct_viommu_ops;
+
+static struct hv_iommu_viommu *
+to_hv_iommu_viommu(struct iommufd_viommu *viommu)
+{
+	return container_of(viommu, struct hv_iommu_viommu, core);
+}
 
 struct hv_iommu_mapping {
 	phys_addr_t paddr;
@@ -102,6 +117,9 @@ struct iommu_domain_geometry default_geometry = (struct iommu_domain_geometry) {
 static u32 unique_id;	      /* unique numeric id of a new domain */
 
 static void hv_iommu_detach_dev(struct hv_domain *hvdom, struct device *dev);
+static void hv_iommu_detach_direct_dev(struct hv_domain *hvdom,
+				       struct device *dev);
+static void hv_iommu_detach_domain_dev(struct device *dev);
 static size_t hv_iommu_unmap_pages(struct iommu_domain *immdom, ulong iova,
 				   size_t pgsize, size_t pgcount,
 				   struct iommu_iotlb_gather *gather);
@@ -132,12 +150,6 @@ static bool hv_curr_thread_is_vmm(void)
 	return hv_get_current_partid() != HV_PARTITION_ID_INVALID;
 }
 
-/* As opposed to some host app like SPDK etc... */
-static bool hv_dom_owner_is_vmm(struct hv_domain *hvdom)
-{
-	return hvdom && hvdom->partid != HV_PARTITION_ID_INVALID;
-}
-
 static bool hv_iommu_capable(struct device *dev, enum iommu_cap cap)
 {
 	switch (cap) {
@@ -155,14 +167,11 @@ static bool hv_iommu_capable(struct device *dev, enum iommu_cap cap)
 bool hv_pcidev_is_attached_dev(struct pci_dev *pdev)
 {
 	struct iommu_domain *iommu_domain;
-	struct hv_domain *hvdom;
 	struct device *dev = &pdev->dev;
 
 	iommu_domain = iommu_get_domain_for_dev(dev);
-	if (iommu_domain) {
-		hvdom = to_hv_domain(iommu_domain);
-		return hvdom->attached_dom;
-	}
+	if (iommu_domain)
+		return iommu_domain->type == IOMMU_DOMAIN_DIRECT;
 
 	return false;
 }
@@ -269,18 +278,12 @@ static struct iommu_domain *hv_iommu_domain_alloc_paging(struct device *dev)
 		goto out_err;
 
 	hvdom->domid_num = unique_id;
-	hvdom->partid = hv_get_current_partid();
 	hvdom->iommu_dom.geometry = default_geometry;
 	hvdom->iommu_dom.pgsize_bitmap = HV_IOMMU_PGSIZES;
 
-	/* For guests, by default we do direct attaches, so no domain in hyp */
-	if (hv_dom_owner_is_vmm(hvdom) && !hv_no_attdev)
-		hvdom->attached_dom = true;
-	else {
-		rc = hv_iommu_create_hyp_devdom(hvdom);
-		if (rc)
-			goto out_err;
-	}
+	rc = hv_iommu_create_hyp_devdom(hvdom);
+	if (rc)
+		goto out_err;
 
 	return &hvdom->iommu_dom;
 
@@ -300,7 +303,7 @@ static void hv_iommu_domain_free(struct iommu_domain *immdom)
 	if (hv_special_domain(hvdom))
 		return;
 
-	if (!hv_dom_owner_is_vmm(hvdom) || hv_no_attdev) {
+	if (immdom->type != IOMMU_DOMAIN_DIRECT) {
 		struct hv_input_device_domain *ddp;
 
 		local_irq_save(flags);
@@ -415,14 +418,14 @@ static int hv_iommu_direct_attach_device(struct pci_dev *pdev, u64 ptid)
 	return hv_result_to_errno(status);
 }
 
-/* Attach a device for passthru to guest VMs, host apps like SPDK, etc */
+/* Attach a device to a hypervisor device domain for host apps like SPDK. */
 static int hv_iommu_attach_dev(struct iommu_domain *immdom, struct device *dev,
 			       struct iommu_domain *old)
 {
 	struct pci_dev *pdev;
 	int rc;
 	struct hv_domain *hvdom_new = to_hv_domain(immdom);
-	struct hv_domain *hvdom_prev = to_hv_domain(old);
+	struct hv_domain *hvdom_prev = old ? to_hv_domain(old) : NULL;
 
 	/* Only allow PCI devices for now */
 	if (!dev_is_pci(dev))
@@ -430,8 +433,7 @@ static int hv_iommu_attach_dev(struct iommu_domain *immdom, struct device *dev,
 
 	pdev = to_pci_dev(dev);
 
-	if (hv_l1vh_partition() && !hv_special_domain(hvdom_new) &&
-	    !hvdom_new->attached_dom)
+	if (hv_l1vh_partition() && !hv_special_domain(hvdom_new))
 		return -EINVAL;
 
 	/* VFIO does not do explicit detach calls, hence check first if we need
@@ -449,11 +451,36 @@ static int hv_iommu_attach_dev(struct iommu_domain *immdom, struct device *dev,
 		return 0;
 	}
 
-	if (hvdom_new->attached_dom)
-		rc = hv_iommu_direct_attach_device(pdev, hvdom_new->partid);
-	else
-		rc = hv_iommu_att_dev2dom(hvdom_new, pdev);
+	rc = hv_iommu_att_dev2dom(hvdom_new, pdev);
 
+	if (rc == 0)
+		dev_iommu_priv_set(dev, hvdom_new);  /* sets "private" field */
+	else
+		dev_iommu_priv_set(dev, NULL);
+
+	return rc;
+}
+
+static int hv_iommu_direct_attach_dev(struct iommu_domain *immdom,
+				      struct device *dev,
+				      struct iommu_domain *old)
+{
+	struct hv_domain *hvdom_new = to_hv_domain(immdom);
+	struct hv_domain *hvdom_prev = old ? to_hv_domain(old) : NULL;
+	struct pci_dev *pdev;
+	int rc;
+
+	/* Only allow PCI devices for now */
+	if (!dev_is_pci(dev))
+		return -EINVAL;
+
+	pdev = to_pci_dev(dev);
+
+	if (hvdom_prev)
+		if (!hv_l1vh_partition() || !hv_special_domain(hvdom_prev))
+			hv_iommu_detach_dev(hvdom_prev, dev);
+
+	rc = hv_iommu_direct_attach_device(pdev, hvdom_new->partid);
 	if (rc == 0)
 		dev_iommu_priv_set(dev, hvdom_new);  /* sets "private" field */
 	else
@@ -506,6 +533,15 @@ static void hv_iommu_det_dev_from_dom(struct pci_dev *pdev)
 
 static void hv_iommu_detach_dev(struct hv_domain *hvdom, struct device *dev)
 {
+	if (hvdom->iommu_dom.type == IOMMU_DOMAIN_DIRECT)
+		hv_iommu_detach_direct_dev(hvdom, dev);
+	else
+		hv_iommu_detach_domain_dev(dev);
+}
+
+static void hv_iommu_detach_direct_dev(struct hv_domain *hvdom,
+				       struct device *dev)
+{
 	struct pci_dev *pdev;
 
 	/* See the attach function, only PCI devices for now */
@@ -514,14 +550,20 @@ static void hv_iommu_detach_dev(struct hv_domain *hvdom, struct device *dev)
 
 	pdev = to_pci_dev(dev);
 
-	if (hvdom->attached_dom)
-		hv_iommu_det_dev_from_guest(pdev, hvdom->partid);
+	hv_iommu_det_dev_from_guest(pdev, hvdom->partid);
+}
 
-		/* Do not clear attached_dom, hv_iommu_unmap_pages happens
-		 * next.
-		 */
-	else
-		hv_iommu_det_dev_from_dom(pdev);
+static void hv_iommu_detach_domain_dev(struct device *dev)
+{
+	struct pci_dev *pdev;
+
+	/* See the attach function, only PCI devices for now */
+	if (!dev_is_pci(dev))
+		return;
+
+	pdev = to_pci_dev(dev);
+
+	hv_iommu_det_dev_from_dom(pdev);
 }
 
 static int hv_iommu_add_tree_mapping(struct hv_domain *hvdom,
@@ -634,11 +676,6 @@ static int hv_iommu_map_pages(struct iommu_domain *immdom, ulong iova,
 	if (ret)
 		return ret;
 
-	if (hvdom->attached_dom) {
-		*mapped = size;
-		return 0;
-	}
-
 	npages = size >> HV_HYP_PAGE_SHIFT;
 	while (done < npages) {
 		ulong completed, remain = npages - done;
@@ -702,9 +739,6 @@ static size_t hv_iommu_unmap_pages(struct iommu_domain *immdom, ulong iova,
 		pr_err("%s: could not delete all mappings (%lx:%lx/%lx)\n",
 		       __func__, iova, unmapped, size);
 
-	if (hvdom->attached_dom)
-		return size;
-
 	npages = size >> HV_HYP_PAGE_SHIFT;
 
 	local_irq_save(flags);
@@ -744,6 +778,114 @@ static phys_addr_t hv_iommu_iova_to_phys(struct iommu_domain *immdom,
 	spin_unlock_irqrestore(&hvdom->mappings_lock, flags);
 
 	return paddr;
+}
+
+static const struct iommu_domain_ops hv_iommu_direct_domain_ops = {
+	.attach_dev = hv_iommu_direct_attach_dev,
+	.free = hv_iommu_domain_free,
+};
+
+static void hv_iommu_viommu_destroy(struct iommufd_viommu *viommu)
+{
+	struct hv_iommu_viommu *hv_viommu = to_hv_iommu_viommu(viommu);
+
+	fput(hv_viommu->vm_file);
+}
+
+static struct iommu_domain *
+hv_iommu_alloc_domain_direct(struct iommufd_viommu *viommu, u32 flags,
+			     const struct iommu_user_data *user_data)
+{
+	struct hv_iommu_viommu *hv_viommu = to_hv_iommu_viommu(viommu);
+	struct iommu_hwpt_direct direct = {};
+	struct hv_domain *hvdom;
+	int rc;
+
+	if (viommu->type != IOMMU_VIOMMU_TYPE_DIRECT)
+		return ERR_PTR(-EOPNOTSUPP);
+	if (flags)
+		return ERR_PTR(-EOPNOTSUPP);
+	if (!user_data || user_data->type != IOMMU_HWPT_DATA_DIRECT)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	rc = iommu_copy_struct_from_user(&direct, user_data,
+					 IOMMU_HWPT_DATA_DIRECT, flags);
+	if (rc)
+		return ERR_PTR(rc);
+	if (direct.flags || direct.__reserved)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	hvdom = kzalloc_obj(*hvdom, GFP_KERNEL_ACCOUNT);
+	if (!hvdom)
+		return ERR_PTR(-ENOMEM);
+
+	hvdom->iommu_dom.type = IOMMU_DOMAIN_DIRECT;
+	hvdom->iommu_dom.ops = &hv_iommu_direct_domain_ops;
+	hvdom->iommu_dom.geometry = default_geometry;
+	hvdom->iommu_dom.pgsize_bitmap = HV_IOMMU_PGSIZES;
+	hvdom->partid = hv_viommu->partid;
+
+	return &hvdom->iommu_dom;
+}
+
+static const struct iommufd_viommu_ops hv_iommu_direct_viommu_ops = {
+	.destroy = hv_iommu_viommu_destroy,
+	.alloc_domain_direct = hv_iommu_alloc_domain_direct,
+};
+
+static size_t hv_iommu_get_viommu_size(struct device *dev,
+				       enum iommu_viommu_type viommu_type)
+{
+	if (viommu_type != IOMMU_VIOMMU_TYPE_DIRECT)
+		return 0;
+	return VIOMMU_STRUCT_SIZE(struct hv_iommu_viommu, core);
+}
+
+static int hv_iommu_viommu_init(struct iommufd_viommu *viommu,
+				struct iommu_domain *parent_domain,
+				const struct iommu_user_data *user_data)
+{
+	u64 (*fn)(struct file *file);
+	struct hv_iommu_viommu *hv_viommu = to_hv_iommu_viommu(viommu);
+	struct iommu_viommu_direct direct = {};
+	int rc;
+
+	if (viommu->type != IOMMU_VIOMMU_TYPE_DIRECT)
+		return -EOPNOTSUPP;
+	if (parent_domain || !user_data)
+		return -EINVAL;
+
+	rc = iommu_copy_struct_from_user(&direct, user_data,
+					 IOMMU_VIOMMU_TYPE_DIRECT, vm_fd);
+	if (rc)
+		return rc;
+	if (direct.flags || direct.__reserved)
+		return -EOPNOTSUPP;
+
+	hv_viommu->vm_file = fget(direct.vm_fd);
+	if (!hv_viommu->vm_file)
+		return -EBADF;
+
+	fn = symbol_get(mshv_partition_file_get_partid);
+	if (!fn) {
+		rc = -EOPNOTSUPP;
+		goto out_put_file;
+	}
+
+	hv_viommu->partid = fn(hv_viommu->vm_file);
+	symbol_put(mshv_partition_file_get_partid);
+	if (hv_viommu->partid == HV_PARTITION_ID_INVALID) {
+		rc = -EINVAL;
+		goto out_put_file;
+	}
+
+	viommu->ops = &hv_iommu_direct_viommu_ops;
+	return 0;
+
+out_put_file:
+	fput(hv_viommu->vm_file);
+	hv_viommu->vm_file = NULL;
+	return rc;
 }
 
 /*
@@ -831,6 +973,8 @@ static int hv_iommu_def_domain_type(struct device *dev)
 static struct iommu_ops hv_iommu_ops = {
 	.capable	    = hv_iommu_capable,
 	.domain_alloc_paging	= hv_iommu_domain_alloc_paging,
+	.get_viommu_size    = hv_iommu_get_viommu_size,
+	.viommu_init	    = hv_iommu_viommu_init,
 	.probe_device	    = hv_iommu_probe_device,
 	.probe_finalize     = hv_iommu_probe_finalize,
 	.release_device     = hv_iommu_release_device,
