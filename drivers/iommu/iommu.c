@@ -199,6 +199,8 @@ static const char *iommu_domain_type_str(unsigned int t)
 		return "Translated";
 	case IOMMU_DOMAIN_PLATFORM:
 		return "Platform";
+	case IOMMU_DOMAIN_DIRECT:
+		return "Direct";
 	default:
 		return "Unknown";
 	}
