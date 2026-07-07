@@ -31,6 +31,7 @@ enum iommufd_object_type {
 	IOMMUFD_OBJ_DEVICE,
 	IOMMUFD_OBJ_HWPT_PAGING,
 	IOMMUFD_OBJ_HWPT_NESTED,
+	IOMMUFD_OBJ_HWPT_DIRECT,
 	IOMMUFD_OBJ_IOAS,
 	IOMMUFD_OBJ_ACCESS,
 	IOMMUFD_OBJ_FAULT,
@@ -149,6 +150,12 @@ struct iommufd_hw_queue {
  *                       must be defined in include/uapi/linux/iommufd.h.
  *                       It must fully initialize the new iommu_domain before
  *                       returning. Upon failure, ERR_PTR must be returned.
+ * @alloc_domain_direct: Allocate a IOMMU_DOMAIN_DIRECT on a vIOMMU that holds
+ *                       the VM identity for an externally managed direct attach
+ *                       domain. @user_data must be defined in
+ *                       include/uapi/linux/iommufd.h. It must fully initialize
+ *                       the new iommu_domain before returning. Upon failure,
+ *                       ERR_PTR must be returned.
  * @cache_invalidate: Flush hardware cache used by a vIOMMU. It can be used for
  *                    any IOMMU hardware specific cache: TLB and device cache.
  *                    The @array passes in the cache invalidation requests, in
@@ -184,6 +191,9 @@ struct iommufd_hw_queue {
 struct iommufd_viommu_ops {
 	void (*destroy)(struct iommufd_viommu *viommu);
 	struct iommu_domain *(*alloc_domain_nested)(
+		struct iommufd_viommu *viommu, u32 flags,
+		const struct iommu_user_data *user_data);
+	struct iommu_domain *(*alloc_domain_direct)(
 		struct iommufd_viommu *viommu, u32 flags,
 		const struct iommu_user_data *user_data);
 	int (*cache_invalidate)(struct iommufd_viommu *viommu,

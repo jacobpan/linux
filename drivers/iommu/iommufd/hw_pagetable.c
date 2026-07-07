@@ -68,6 +68,20 @@ void iommufd_hwpt_nested_abort(struct iommufd_object *obj)
 	iommufd_hwpt_nested_destroy(obj);
 }
 
+void iommufd_hwpt_direct_destroy(struct iommufd_object *obj)
+{
+	struct iommufd_hwpt_direct *hwpt_direct =
+		container_of(obj, struct iommufd_hwpt_direct, common.obj);
+
+	__iommufd_hwpt_destroy(&hwpt_direct->common);
+	refcount_dec(&hwpt_direct->viommu->obj.users);
+}
+
+void iommufd_hwpt_direct_abort(struct iommufd_object *obj)
+{
+	iommufd_hwpt_direct_destroy(obj);
+}
+
 static int
 iommufd_hwpt_paging_enforce_cc(struct iommufd_hwpt_paging *hwpt_paging)
 {
@@ -333,6 +347,52 @@ out_abort:
 	return ERR_PTR(rc);
 }
 
+static struct iommufd_hwpt_direct *
+iommufd_viommu_alloc_hwpt_direct(struct iommufd_viommu *viommu, u32 flags,
+				 const struct iommu_user_data *user_data)
+{
+	struct iommufd_hwpt_direct *hwpt_direct;
+	struct iommufd_hw_pagetable *hwpt;
+	int rc;
+
+	if (flags)
+		return ERR_PTR(-EOPNOTSUPP);
+	if (!user_data->len)
+		return ERR_PTR(-EOPNOTSUPP);
+	if (!viommu->ops || !viommu->ops->alloc_domain_direct)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	hwpt_direct = __iommufd_object_alloc(
+		viommu->ictx, hwpt_direct, IOMMUFD_OBJ_HWPT_DIRECT, common.obj);
+	if (IS_ERR(hwpt_direct))
+		return ERR_CAST(hwpt_direct);
+	hwpt = &hwpt_direct->common;
+
+	hwpt_direct->viommu = viommu;
+	refcount_inc(&viommu->obj.users);
+
+	hwpt->domain = viommu->ops->alloc_domain_direct(viommu, flags,
+							user_data);
+	if (IS_ERR(hwpt->domain)) {
+		rc = PTR_ERR(hwpt->domain);
+		hwpt->domain = NULL;
+		goto out_abort;
+	}
+	hwpt->domain->iommufd_hwpt = hwpt;
+	hwpt->domain->owner = viommu->iommu_dev->ops;
+	hwpt->domain->cookie_type = IOMMU_COOKIE_IOMMUFD;
+
+	if (WARN_ON_ONCE(hwpt->domain->type != IOMMU_DOMAIN_DIRECT)) {
+		rc = -EOPNOTSUPP;
+		goto out_abort;
+	}
+	return hwpt_direct;
+
+out_abort:
+	iommufd_object_abort_and_destroy(viommu->ictx, &hwpt->obj);
+	return ERR_PTR(rc);
+}
+
 int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 {
 	struct iommu_hwpt_alloc *cmd = ucmd->cmd;
@@ -390,6 +450,7 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 		}
 		hwpt = &hwpt_nested->common;
 	} else if (pt_obj->type == IOMMUFD_OBJ_VIOMMU) {
+		struct iommufd_hwpt_direct *hwpt_direct;
 		struct iommufd_hwpt_nested *hwpt_nested;
 		struct iommufd_viommu *viommu;
 
@@ -398,13 +459,23 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 			rc = -EINVAL;
 			goto out_unlock;
 		}
-		hwpt_nested = iommufd_viommu_alloc_hwpt_nested(
-			viommu, cmd->flags, &user_data);
-		if (IS_ERR(hwpt_nested)) {
-			rc = PTR_ERR(hwpt_nested);
-			goto out_unlock;
+		if (cmd->data_type == IOMMU_HWPT_DATA_DIRECT) {
+			hwpt_direct = iommufd_viommu_alloc_hwpt_direct(
+				viommu, cmd->flags, &user_data);
+			if (IS_ERR(hwpt_direct)) {
+				rc = PTR_ERR(hwpt_direct);
+				goto out_unlock;
+			}
+			hwpt = &hwpt_direct->common;
+		} else {
+			hwpt_nested = iommufd_viommu_alloc_hwpt_nested(
+				viommu, cmd->flags, &user_data);
+			if (IS_ERR(hwpt_nested)) {
+				rc = PTR_ERR(hwpt_nested);
+				goto out_unlock;
+			}
+			hwpt = &hwpt_nested->common;
 		}
-		hwpt = &hwpt_nested->common;
 	} else {
 		rc = -EINVAL;
 		goto out_put_pt;
