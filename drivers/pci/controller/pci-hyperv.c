@@ -1427,6 +1427,12 @@ static bool hv_vmbus_pci_device(struct pci_bus *pbus)
 	return pbus->ops == &hv_pcifront_ops;
 }
 
+bool hv_pci_vmbus_device(struct pci_dev *pdev)
+{
+	return hv_vmbus_pci_device(pdev->bus);
+}
+EXPORT_SYMBOL_GPL(hv_pci_vmbus_device);
+
 /*
  * Paravirtual backchannel
  *

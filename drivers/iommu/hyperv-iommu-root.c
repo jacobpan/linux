@@ -212,10 +212,9 @@ static u64 hv_build_devid_type_logical(struct pci_dev *pdev)
 u64 hv_build_devid_oftype(struct pci_dev *pdev, enum hv_device_type type)
 {
 	if (type == HV_DEVICE_TYPE_LOGICAL) {
-		if (hv_l1vh_partition())
-			return hv_pci_vmbus_device_id(pdev);
-		else
-			return hv_build_devid_type_logical(pdev);
+		u64 devid = hv_pci_vmbus_device_id(pdev);
+
+		return devid ? devid : hv_build_devid_type_logical(pdev);
 	} else if (type == HV_DEVICE_TYPE_PCI)
 #ifdef CONFIG_X86
 		return hv_build_devid_type_pci(pdev);
@@ -349,7 +348,7 @@ static int hv_iommu_att_dev2dom(struct hv_domain *hvdom, struct pci_dev *pdev)
 	/* NB: Upon guest shutdown, device is re-attached to the default domain
 	 *     without explicit detach.
 	 */
-	if (hv_l1vh_partition())
+	if (hv_pci_vmbus_device(pdev))
 		dev_type = HV_DEVICE_TYPE_LOGICAL;
 	else
 		dev_type = HV_DEVICE_TYPE_PCI;
@@ -380,7 +379,7 @@ static int hv_iommu_direct_attach_device(struct pci_dev *pdev, u64 ptid)
 		return -EINVAL;
 	}
 
-	if (hv_l1vh_partition())
+	if (hv_pci_vmbus_device(pdev))
 		dev_type = HV_DEVICE_TYPE_LOGICAL;
 	else
 		dev_type = HV_DEVICE_TYPE_PCI;
