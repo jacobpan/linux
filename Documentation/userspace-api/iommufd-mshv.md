@@ -244,6 +244,33 @@ single VM-device-ID encoding for `virt_id`; host representations such as
 SBDF must be translated or validated before the vDEVICE is created, not
 passed as an alternate `virt_id` encoding.
 
+The same logical device ID must be visible on both sides of an L1VH direct
+assignment. The VMM chooses the ID, IOMMUFD records it as `vDEVICE.virt_id`,
+and Hyper-V exposes the same value to the guest pv-IOMMU as the vPCI
+`device_id` value:
+
+```
++--------------------+------------------------------+------------------------------+-------------------------------+-------------------------------+-------------------------------+
+| Context            | Hypercall field              | Value                        | Owner                         | Scope and lifetime            | Usage                         |
++--------------------+------------------------------+------------------------------+-------------------------------+-------------------------------+-------------------------------+
+| L1VH direct attach | ATTACH_DEVICE.device_id      | Host-side device ID derived  | Hyper-V root IOMMU driver     | Host/L1VH device namespace,   | Selects the host-side device  |
+|                    |                              | from pdev: vPCI uses VMBus   |                               | tied to the physical or       | to attach to the target VM    |
+|                    |                              | logical-ID encoding;         |                               | emulated device lifetime      |                               |
+|                    |                              | emulated PCI uses            |                               |                               |                               |
+|                    |                              | segment/BDF encoding         |                               |                               |                               |
++--------------------+------------------------------+------------------------------+-------------------------------+-------------------------------+-------------------------------+
+| L1VH direct attach | ATTACH_DEVICE.logical_devid  | VMM-chosen hv_logical_devid, | VMM owns allocation and reuse | Per-VM/per-vIOMMU namespace,  | Guest-visible device identity |
+|                    | DETACH_DEVICE.logical_devid  | carried by                   | policy; IOMMUFD stores it in | tied to vDEVICE lifetime      | for direct attach, detach,    |
+|                    |                              | IOMMU_VDEVICE_ALLOC.virt_id  | the vDEVICE                   |                               | and interrupt retargeting     |
++--------------------+------------------------------+------------------------------+-------------------------------+-------------------------------+-------------------------------+
+| Guest pv-IOMMU     | ATTACH_DEVICE_DOMAIN.        | Same logical-ID encoded      | pci-hyperv registers the      | Guest vPCI namespace, tied to | Selects the guest-visible     |
+|                    | device_id                    | value as L1VH                | prefix; pv-IOMMU derives the | vPCI bus/device lifetime      | vPCI endpoint for pv-IOMMU    |
+|                    |                              | ATTACH_DEVICE.logical_devid: | full value                    |                               | domain attach and related     |
+|                    |                              | vPCI bus prefix plus         |                               |                               | hypercalls                    |
+|                    |                              | PCI_FUNC(devfn)              |                               |                               |                               |
++--------------------+------------------------------+------------------------------+-------------------------------+-------------------------------+-------------------------------+
+```
+
 **HWPT_DIRECT**
 New attachable HWPT child allocated under a vIOMMU for a driver-managed VM
 translation. It is not linked to an IOAS and IOMMUFD must not call
