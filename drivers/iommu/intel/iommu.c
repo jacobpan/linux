@@ -19,11 +19,14 @@
 #include <linux/file.h>
 #include <linux/iommufd.h>
 #include <linux/memory.h>
+#include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/pci-ats.h>
 #include <linux/spinlock.h>
 #include <linux/syscore_ops.h>
 #include <linux/tboot.h>
+
+#include <asm/mshyperv.h>
 
 #include "iommu.h"
 #include "../dma-iommu.h"
@@ -61,6 +64,7 @@ static int rwbf_quirk;
 struct intel_iommu_viommu {
 	struct iommufd_viommu core;
 	struct file *vm_file;
+	u64 partid;
 };
 
 static const struct iommufd_viommu_ops intel_direct_viommu_ops;
@@ -3978,6 +3982,7 @@ static int intel_iommu_viommu_init(struct iommufd_viommu *viommu,
 				   struct iommu_domain *parent_domain,
 				   const struct iommu_user_data *user_data)
 {
+	u64 (*fn)(struct file *file);
 	struct intel_iommu_viommu *intel_viommu =
 		to_intel_iommu_viommu(viommu);
 	struct iommu_viommu_direct direct = {};
@@ -3999,8 +4004,29 @@ static int intel_iommu_viommu_init(struct iommufd_viommu *viommu,
 	if (!intel_viommu->vm_file)
 		return -EBADF;
 
+	fn = symbol_get(mshv_partition_file_get_partid);
+	if (!fn) {
+		ret = -EOPNOTSUPP;
+		goto out_put_file;
+	}
+
+	intel_viommu->partid = fn(intel_viommu->vm_file);
+	symbol_put(mshv_partition_file_get_partid);
+	if (intel_viommu->partid == HV_PARTITION_ID_INVALID) {
+		ret = -EINVAL;
+		goto out_put_file;
+	}
+
+	pr_info("direct vIOMMU init: vm_fd=%u partid=0x%llx\n",
+		direct.vm_fd, intel_viommu->partid);
+
 	viommu->ops = &intel_direct_viommu_ops;
 	return 0;
+
+out_put_file:
+	fput(intel_viommu->vm_file);
+	intel_viommu->vm_file = NULL;
+	return ret;
 }
 
 const struct iommu_domain_ops intel_fs_paging_domain_ops = {
