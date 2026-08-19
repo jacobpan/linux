@@ -19,7 +19,6 @@
 #include <linux/file.h>
 #include <linux/iommufd.h>
 #include <linux/memory.h>
-#include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/pci-ats.h>
 #include <linux/spinlock.h>
@@ -3982,7 +3981,6 @@ static int intel_iommu_viommu_init(struct iommufd_viommu *viommu,
 				   struct iommu_domain *parent_domain,
 				   const struct iommu_user_data *user_data)
 {
-	u64 (*fn)(struct file *file);
 	struct intel_iommu_viommu *intel_viommu =
 		to_intel_iommu_viommu(viommu);
 	struct iommu_viommu_direct direct = {};
@@ -4004,16 +4002,10 @@ static int intel_iommu_viommu_init(struct iommufd_viommu *viommu,
 	if (!intel_viommu->vm_file)
 		return -EBADF;
 
-	fn = symbol_get(mshv_partition_file_get_partid);
-	if (!fn) {
-		ret = -EOPNOTSUPP;
-		goto out_put_file;
-	}
-
-	intel_viommu->partid = fn(intel_viommu->vm_file);
-	symbol_put(mshv_partition_file_get_partid);
+	intel_viommu->partid =
+		mshv_partition_file_get_partid(intel_viommu->vm_file);
 	if (intel_viommu->partid == HV_PARTITION_ID_INVALID) {
-		ret = -EINVAL;
+		ret = IS_REACHABLE(CONFIG_MSHV_ROOT) ? -EINVAL : -EOPNOTSUPP;
 		goto out_put_file;
 	}
 

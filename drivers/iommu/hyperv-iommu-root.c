@@ -844,7 +844,6 @@ static int hv_iommu_viommu_init(struct iommufd_viommu *viommu,
 				struct iommu_domain *parent_domain,
 				const struct iommu_user_data *user_data)
 {
-	u64 (*fn)(struct file *file);
 	struct hv_iommu_viommu *hv_viommu = to_hv_iommu_viommu(viommu);
 	struct iommu_viommu_direct direct = {};
 	int rc;
@@ -865,16 +864,10 @@ static int hv_iommu_viommu_init(struct iommufd_viommu *viommu,
 	if (!hv_viommu->vm_file)
 		return -EBADF;
 
-	fn = symbol_get(mshv_partition_file_get_partid);
-	if (!fn) {
-		rc = -EOPNOTSUPP;
-		goto out_put_file;
-	}
-
-	hv_viommu->partid = fn(hv_viommu->vm_file);
-	symbol_put(mshv_partition_file_get_partid);
+	hv_viommu->partid =
+		mshv_partition_file_get_partid(hv_viommu->vm_file);
 	if (hv_viommu->partid == HV_PARTITION_ID_INVALID) {
-		rc = -EINVAL;
+		rc = IS_REACHABLE(CONFIG_MSHV_ROOT) ? -EINVAL : -EOPNOTSUPP;
 		goto out_put_file;
 	}
 

@@ -382,8 +382,6 @@ int hv_call_notify_all_processors_started(void);
 bool hv_lp_exists(u32 lp_index);
 int hv_call_create_vp(int node, u64 partition_id, u32 vp_index, u32 flags);
 u64 mshv_current_partid(void);
-struct file;
-u64 mshv_partition_file_get_partid(struct file *file);
 
 #else /* CONFIG_MSHV_ROOT */
 static inline bool hv_root_partition(void) { return false; }
@@ -418,13 +416,17 @@ static inline u64 mshv_current_partid(void)
 {
 	return HV_PARTITION_ID_INVALID;
 }
+#endif /* CONFIG_MSHV_ROOT */
 
 struct file;
+#if IS_REACHABLE(CONFIG_MSHV_ROOT)
+u64 mshv_partition_file_get_partid(struct file *file);
+#else
 static inline u64 mshv_partition_file_get_partid(struct file *file)
 {
 	return HV_PARTITION_ID_INVALID;
 }
-#endif /* CONFIG_MSHV_ROOT */
+#endif
 
 static inline int hv_deposit_memory(u64 partition_id, u64 status)
 {
