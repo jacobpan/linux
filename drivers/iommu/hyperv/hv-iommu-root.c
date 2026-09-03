@@ -7,6 +7,7 @@
 #include <linux/dma-map-ops.h>
 #include <linux/interval_tree.h>
 #include <linux/hyperv.h>
+#include <linux/iommufd.h>
 #include "hv-iommu.h"
 #include <asm/iommu.h>
 #include <asm/mshyperv.h>
@@ -57,6 +58,13 @@ static struct hv_domain hv_def_blocked_dom;
 static bool hv_special_domain(struct hv_domain *hvdom)
 {
 	return hvdom == &hv_def_identity_dom || hvdom == &hv_def_blocked_dom;
+}
+
+static u64 hv_iommu_host_device_id(struct pci_dev *pdev)
+{
+	u64 devid = hv_pci_vmbus_device_id(pdev);
+
+	return devid ? devid : hv_build_devid_type_pci(pdev);
 }
 
 static atomic_t hv_unique_id;		/* unique numeric id for a new domain */
@@ -205,6 +213,11 @@ static void hv_iommu_domain_free(struct iommu_domain *immdom)
 	if (hv_special_domain(hvdom))
 		return;
 
+	if (immdom->type == IOMMU_DOMAIN_EXTERNAL) {
+		kfree(hvdom);
+		return;
+	}
+
 	/* Cleanup any remaining. 0 for size results in ULONG_MAX as the last */
 	hv_iommu_del_tree_mappings(hvdom, 0, 0);
 
@@ -269,11 +282,82 @@ static int hv_iommu_attach_dev(struct iommu_domain *immdom, struct device *dev,
 
 	pdev = to_pci_dev(dev);
 
+	/*
+	 * HVCALL_ATTACH_DEVICE_DOMAIN atomically replaces any existing
+	 * assignment, leaving @old intact if the new attachment fails.
+	 */
 	rc = hv_iommu_att_dev2dom(hvdom_new, pdev);
 	if (rc)
 		WARN(1, "Failed to attach pdev:%s\n", pci_name(pdev));
 
 	return rc;
+}
+
+static int hv_iommu_external_attach_device(struct pci_dev *pdev, u64 partid,
+					   unsigned long vdev_id)
+{
+	struct hv_input_attach_device *input;
+	union hv_device_id host_devid;
+	unsigned long flags;
+	u64 status;
+	int rc;
+
+	if (partid == HV_PARTITION_ID_INVALID)
+		return -EINVAL;
+
+	host_devid.as_uint64 = hv_iommu_host_device_id(pdev);
+
+	do {
+		local_irq_save(flags);
+		input = *this_cpu_ptr(hyperv_pcpu_input_arg);
+		memset(input, 0, sizeof(*input));
+
+		input->partition_id = partid;
+		input->device_id = host_devid;
+		input->attdev_flags.logical_id = 1;
+		input->logical_devid = vdev_id;
+
+		status = hv_do_hypercall(HVCALL_ATTACH_DEVICE, input, NULL);
+		local_irq_restore(flags);
+
+		if (hv_result(status) == HV_STATUS_INSUFFICIENT_MEMORY) {
+			rc = hv_call_deposit_pages(NUMA_NO_NODE, partid, 1);
+			if (rc)
+				return rc;
+		}
+	} while (hv_result(status) == HV_STATUS_INSUFFICIENT_MEMORY);
+
+	if (!hv_result_success(status))
+		hv_status_err(status, "\n");
+
+	return hv_result_to_errno(status);
+}
+
+static int hv_iommu_external_attach_dev(struct iommu_domain *immdom,
+					struct device *dev,
+					struct iommu_domain *old)
+{
+	struct hv_domain *hvdom_new = to_hv_domain(immdom);
+	unsigned long vdev_id;
+	int rc;
+
+	if (!dev_is_pci(dev))
+		return -EINVAL;
+
+	rc = iommufd_viommu_get_vdev_id(hvdom_new->viommu, dev, &vdev_id);
+	if (rc)
+		return rc;
+
+	rc = hv_iommufd_prepare_attach(hvdom_new->viommu);
+	if (rc)
+		return rc;
+
+	/*
+	 * HVCALL_ATTACH_DEVICE atomically replaces any existing assignment,
+	 * leaving @old intact if the new attachment fails.
+	 */
+	return hv_iommu_external_attach_device(to_pci_dev(dev),
+					       hvdom_new->partid, vdev_id);
 }
 
 static u64 hv_iommu_unmap_batch(u32 domid_num, ulong iova, u16 count)
@@ -524,6 +608,11 @@ static struct iommu_domain_ops hv_paging_domain_ops = {
 	.map_pages = hv_iommu_map_pages,
 	.unmap_pages = hv_iommu_unmap_pages,
 	.iova_to_phys = hv_iommu_iova_to_phys,
+	.free = hv_iommu_domain_free,
+};
+
+const struct iommu_domain_ops hv_iommu_external_domain_ops = {
+	.attach_dev = hv_iommu_external_attach_dev,
 	.free = hv_iommu_domain_free,
 };
 

@@ -20,14 +20,19 @@ struct iommu_user_data;
 struct hv_domain {
 	struct iommu_domain iommu_dom;
 	u32 domid_num;			      /* as opposed to domain_id.type */
+	u64 partid;			      /* partition id for external attach */
+	struct iommufd_viommu *viommu;
 	spinlock_t mappings_lock;	      /* protects mappings_tree */
 	struct rb_root_cached mappings_tree;  /* iova to pa lookup tree */
 };
 
 #define to_hv_domain(d) container_of(d, struct hv_domain, iommu_dom)
 
+extern const struct iommu_domain_ops hv_iommu_external_domain_ops;
+
 const struct iommufd_viommu_ops *
 hv_iommufd_get_viommu_ops(struct device *dev,
 			  enum iommu_viommu_type viommu_type);
+int hv_iommufd_prepare_attach(struct iommufd_viommu *viommu);
 
 #endif /* __HYPERV_IOMMU_H */
