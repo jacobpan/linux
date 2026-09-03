@@ -56,17 +56,18 @@ struct hv_iommu_mapping {
  *     1. Domain Attach: A device domain is created in the hypervisor, the
  *			 device is attached to this domain, and then memory
  *			 ranges are mapped in the map callbacks.
- *     2. Direct Attach: No need to create a domain in the hypervisor for direct
- *			 attached devices. A hypercall is made to tell the
+ *     2. external attach: No need to create a domain in the hypervisor for
+ *			 external attach devices. A hypercall is made to tell the
  *			 hypervisor to attach the device to a guest. There is
  *			 no need for explicit memory mappings because the
  *			 hypervisor will just use the guest HW page table.
  *
- * Since a direct attach is much faster, it is the default. This can be
+ * Since external attach is much faster, it is the default. This can be
  * changed via hv_no_attdev.
  *
- * L1VH: hypervisor only supports direct attach. Also, there is no S2 default
- *	 in the hypervisor, so no explicit attach to S2 needed.
+ * L1VH: hypervisor only supports external attach.
+ *	 Also, there is no S2 default in the hypervisor, so no explicit attach
+ *	 to S2 needed.
  */
 
 /*
@@ -81,16 +82,18 @@ static bool hv_special_domain(struct hv_domain *hvdom)
 	return hvdom == &hv_def_identity_dom || hvdom == &hv_null_dom;
 }
 
-const struct iommu_domain_geometry hv_iommu_hv_iommu_default_geometry = {
+const struct iommu_domain_geometry hv_iommu_default_geometry = {
 	.aperture_start = 0,
 	.aperture_end = -1UL,
 	.force_aperture = true,
 };
 
-
 static u32 unique_id;	      /* unique numeric id of a new domain */
 
 static void hv_iommu_detach_dev(struct hv_domain *hvdom, struct device *dev);
+static void hv_iommu_detach_external_dev(struct hv_domain *hvdom,
+				       struct device *dev);
+static void hv_iommu_detach_domain_dev(struct device *dev);
 static size_t hv_iommu_unmap_pages(struct iommu_domain *immdom, ulong iova,
 				   size_t pgsize, size_t pgcount,
 				   struct iommu_iotlb_gather *gather);
@@ -121,12 +124,6 @@ static bool hv_curr_thread_is_vmm(void)
 	return hv_get_current_partid() != HV_PARTITION_ID_INVALID;
 }
 
-/* As opposed to some host app like SPDK etc... */
-static bool hv_dom_owner_is_vmm(struct hv_domain *hvdom)
-{
-	return hvdom && hvdom->partid != HV_PARTITION_ID_INVALID;
-}
-
 static bool hv_iommu_capable(struct device *dev, enum iommu_cap cap)
 {
 	switch (cap) {
@@ -138,20 +135,17 @@ static bool hv_iommu_capable(struct device *dev, enum iommu_cap cap)
 }
 
 /*
- * Check if given pci device is a direct attached device. Caller must have
+ * Check if given pci device is an external attach device. Caller must have
  * verified pdev is a valid pci device.
  */
 bool hv_pcidev_is_attached_dev(struct pci_dev *pdev)
 {
 	struct iommu_domain *iommu_domain;
-	struct hv_domain *hvdom;
 	struct device *dev = &pdev->dev;
 
 	iommu_domain = iommu_get_domain_for_dev(dev);
-	if (iommu_domain) {
-		hvdom = to_hv_domain(iommu_domain);
-		return hvdom->attached_dom;
-	}
+	if (iommu_domain)
+		return iommu_domain->type == IOMMU_DOMAIN_EXTERNAL;
 
 	return false;
 }
@@ -169,7 +163,7 @@ bool hv_pcidev_is_pthru_dev(struct pci_dev *pdev)
 }
 EXPORT_SYMBOL_GPL(hv_pcidev_is_pthru_dev);
 
-/* Build device id for direct attached devices */
+/* Build device id for external attach devices */
 static u64 hv_build_devid_type_logical(struct pci_dev *pdev)
 {
 	hv_pci_segment segment;
@@ -192,10 +186,9 @@ static u64 hv_build_devid_type_logical(struct pci_dev *pdev)
 u64 hv_build_devid_oftype(struct pci_dev *pdev, enum hv_device_type type)
 {
 	if (type == HV_DEVICE_TYPE_LOGICAL) {
-		if (hv_l1vh_partition())
-			return hv_pci_vmbus_device_id(pdev);
-		else
-			return hv_build_devid_type_logical(pdev);
+		u64 devid = hv_pci_vmbus_device_id(pdev);
+
+		return devid ? devid : hv_build_devid_type_logical(pdev);
 	} else if (type == HV_DEVICE_TYPE_PCI)
 #ifdef CONFIG_X86
 		return hv_build_devid_type_pci(pdev);
@@ -258,18 +251,12 @@ static struct iommu_domain *hv_iommu_domain_alloc_paging(struct device *dev)
 		goto out_err;
 
 	hvdom->domid_num = unique_id;
-	hvdom->partid = hv_get_current_partid();
 	hvdom->iommu_dom.geometry = hv_iommu_default_geometry;
 	hvdom->iommu_dom.pgsize_bitmap = HV_IOMMU_PGSIZES;
 
-	/* For guests, by default we do direct attaches, so no domain in hyp */
-	if (hv_dom_owner_is_vmm(hvdom) && !hv_no_attdev)
-		hvdom->attached_dom = true;
-	else {
-		rc = hv_iommu_create_hyp_devdom(hvdom);
-		if (rc)
-			goto out_err;
-	}
+	rc = hv_iommu_create_hyp_devdom(hvdom);
+	if (rc)
+		goto out_err;
 
 	return &hvdom->iommu_dom;
 
@@ -289,7 +276,7 @@ static void hv_iommu_domain_free(struct iommu_domain *immdom)
 	if (hv_special_domain(hvdom))
 		return;
 
-	if (!hv_dom_owner_is_vmm(hvdom) || hv_no_attdev) {
+	if (immdom->type != IOMMU_DOMAIN_EXTERNAL) {
 		struct hv_input_device_domain *ddp;
 
 		local_irq_save(flags);
@@ -335,7 +322,7 @@ static int hv_iommu_att_dev2dom(struct hv_domain *hvdom, struct pci_dev *pdev)
 	/* NB: Upon guest shutdown, device is re-attached to the default domain
 	 *     without explicit detach.
 	 */
-	if (hv_l1vh_partition())
+	if (hv_pci_vmbus_device(pdev))
 		dev_type = HV_DEVICE_TYPE_LOGICAL;
 	else
 		dev_type = HV_DEVICE_TYPE_PCI;
@@ -352,7 +339,7 @@ static int hv_iommu_att_dev2dom(struct hv_domain *hvdom, struct pci_dev *pdev)
 }
 
 /* Caller must have validated that dev is a valid pci dev */
-static int hv_iommu_direct_attach_device(struct pci_dev *pdev, u64 ptid)
+static int hv_iommu_external_attach_device(struct pci_dev *pdev, u64 ptid)
 {
 	struct hv_input_attach_device *input;
 	u64 status;
@@ -362,11 +349,11 @@ static int hv_iommu_direct_attach_device(struct pci_dev *pdev, u64 ptid)
 	enum hv_device_type dev_type;
 
 	if (ptid == HV_PARTITION_ID_INVALID) {
-		pr_err("Hyper-V: Invalid partition id in direct attach\n");
+		pr_err("Hyper-V: Invalid partition id in external attach\n");
 		return -EINVAL;
 	}
 
-	if (hv_l1vh_partition())
+	if (hv_pci_vmbus_device(pdev))
 		dev_type = HV_DEVICE_TYPE_LOGICAL;
 	else
 		dev_type = HV_DEVICE_TYPE_PCI;
@@ -404,14 +391,14 @@ static int hv_iommu_direct_attach_device(struct pci_dev *pdev, u64 ptid)
 	return hv_result_to_errno(status);
 }
 
-/* Attach a device for passthru to guest VMs, host apps like SPDK, etc */
+/* Attach a device to a hypervisor device domain for host apps like SPDK. */
 static int hv_iommu_attach_dev(struct iommu_domain *immdom, struct device *dev,
 			       struct iommu_domain *old)
 {
 	struct pci_dev *pdev;
 	int rc;
 	struct hv_domain *hvdom_new = to_hv_domain(immdom);
-	struct hv_domain *hvdom_prev = to_hv_domain(old);
+	struct hv_domain *hvdom_prev = old ? to_hv_domain(old) : NULL;
 
 	/* Only allow PCI devices for now */
 	if (!dev_is_pci(dev))
@@ -419,8 +406,7 @@ static int hv_iommu_attach_dev(struct iommu_domain *immdom, struct device *dev,
 
 	pdev = to_pci_dev(dev);
 
-	if (hv_l1vh_partition() && !hv_special_domain(hvdom_new) &&
-	    !hvdom_new->attached_dom)
+	if (hv_l1vh_partition() && !hv_special_domain(hvdom_new))
 		return -EINVAL;
 
 	/* VFIO does not do explicit detach calls, hence check first if we need
@@ -438,11 +424,36 @@ static int hv_iommu_attach_dev(struct iommu_domain *immdom, struct device *dev,
 		return 0;
 	}
 
-	if (hvdom_new->attached_dom)
-		rc = hv_iommu_direct_attach_device(pdev, hvdom_new->partid);
-	else
-		rc = hv_iommu_att_dev2dom(hvdom_new, pdev);
+	rc = hv_iommu_att_dev2dom(hvdom_new, pdev);
 
+	if (rc == 0)
+		dev_iommu_priv_set(dev, hvdom_new);  /* sets "private" field */
+	else
+		dev_iommu_priv_set(dev, NULL);
+
+	return rc;
+}
+
+static int hv_iommu_external_attach_dev(struct iommu_domain *immdom,
+				      struct device *dev,
+				      struct iommu_domain *old)
+{
+	struct hv_domain *hvdom_new = to_hv_domain(immdom);
+	struct hv_domain *hvdom_prev = old ? to_hv_domain(old) : NULL;
+	struct pci_dev *pdev;
+	int rc;
+
+	/* Only allow PCI devices for now */
+	if (!dev_is_pci(dev))
+		return -EINVAL;
+
+	pdev = to_pci_dev(dev);
+
+	if (hvdom_prev)
+		if (!hv_l1vh_partition() || !hv_special_domain(hvdom_prev))
+			hv_iommu_detach_dev(hvdom_prev, dev);
+
+	rc = hv_iommu_external_attach_device(pdev, hvdom_new->partid);
 	if (rc == 0)
 		dev_iommu_priv_set(dev, hvdom_new);  /* sets "private" field */
 	else
@@ -495,6 +506,15 @@ static void hv_iommu_det_dev_from_dom(struct pci_dev *pdev)
 
 static void hv_iommu_detach_dev(struct hv_domain *hvdom, struct device *dev)
 {
+	if (hvdom->iommu_dom.type == IOMMU_DOMAIN_EXTERNAL)
+		hv_iommu_detach_external_dev(hvdom, dev);
+	else
+		hv_iommu_detach_domain_dev(dev);
+}
+
+static void hv_iommu_detach_external_dev(struct hv_domain *hvdom,
+				       struct device *dev)
+{
 	struct pci_dev *pdev;
 
 	/* See the attach function, only PCI devices for now */
@@ -503,14 +523,20 @@ static void hv_iommu_detach_dev(struct hv_domain *hvdom, struct device *dev)
 
 	pdev = to_pci_dev(dev);
 
-	if (hvdom->attached_dom)
-		hv_iommu_det_dev_from_guest(pdev, hvdom->partid);
+	hv_iommu_det_dev_from_guest(pdev, hvdom->partid);
+}
 
-		/* Do not clear attached_dom, hv_iommu_unmap_pages happens
-		 * next.
-		 */
-	else
-		hv_iommu_det_dev_from_dom(pdev);
+static void hv_iommu_detach_domain_dev(struct device *dev)
+{
+	struct pci_dev *pdev;
+
+	/* See the attach function, only PCI devices for now */
+	if (!dev_is_pci(dev))
+		return;
+
+	pdev = to_pci_dev(dev);
+
+	hv_iommu_det_dev_from_dom(pdev);
 }
 
 static int hv_iommu_add_tree_mapping(struct hv_domain *hvdom,
@@ -623,11 +649,6 @@ static int hv_iommu_map_pages(struct iommu_domain *immdom, ulong iova,
 	if (ret)
 		return ret;
 
-	if (hvdom->attached_dom) {
-		*mapped = size;
-		return 0;
-	}
-
 	npages = size >> HV_HYP_PAGE_SHIFT;
 	while (done < npages) {
 		ulong completed, remain = npages - done;
@@ -691,9 +712,6 @@ static size_t hv_iommu_unmap_pages(struct iommu_domain *immdom, ulong iova,
 		pr_err("%s: could not delete all mappings (%lx:%lx/%lx)\n",
 		       __func__, iova, unmapped, size);
 
-	if (hvdom->attached_dom)
-		return size;
-
 	npages = size >> HV_HYP_PAGE_SHIFT;
 
 	local_irq_save(flags);
@@ -734,6 +752,11 @@ static phys_addr_t hv_iommu_iova_to_phys(struct iommu_domain *immdom,
 
 	return paddr;
 }
+
+const struct iommu_domain_ops hv_iommu_external_domain_ops = {
+	.attach_dev = hv_iommu_external_attach_dev,
+	.free = hv_iommu_domain_free,
+};
 
 /*
  * Currently, hypervisor does not provide list of devices it is using
