@@ -321,8 +321,11 @@ bool hv_query_ext_cap(u64 cap_query);
 void hv_setup_dma_ops(struct device *dev, bool coherent);
 
 #if IS_ENABLED(CONFIG_PCI_HYPERV)
+bool hv_pci_vmbus_device(struct pci_dev *pdev);
 u64 hv_pci_vmbus_device_id(struct pci_dev *pdev);
 #else
+static inline bool hv_pci_vmbus_device(struct pci_dev *pdev)
+{ return false; }
 static inline u64 hv_pci_vmbus_device_id(struct pci_dev *pdev)
 { return 0; }
 #endif /* IS_ENABLED(CONFIG_PCI_HYPERV) */
