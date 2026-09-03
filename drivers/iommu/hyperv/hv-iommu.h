@@ -14,6 +14,9 @@
 
 #define HV_IOMMU_PGSIZES SZ_4K  /* for now, to be enhanced */
 
+struct iommufd_viommu;
+struct iommu_user_data;
+
 struct hv_domain {
 	struct iommu_domain iommu_dom;
 	u32 domid_num;			      /* as opposed to domain_id.type */
@@ -22,5 +25,9 @@ struct hv_domain {
 };
 
 #define to_hv_domain(d) container_of(d, struct hv_domain, iommu_dom)
+
+const struct iommufd_viommu_ops *
+hv_iommufd_get_viommu_ops(struct device *dev,
+			  enum iommu_viommu_type viommu_type);
 
 #endif /* __HYPERV_IOMMU_H */
