@@ -33,9 +33,53 @@ static void hv_iommu_viommu_destroy(struct iommufd_viommu *viommu)
 	fput(hv_viommu->vm_file);
 }
 
+static struct iommu_domain *
+hv_iommu_alloc_domain_external(struct iommufd_viommu *viommu, u32 flags,
+			       const struct iommu_user_data *user_data)
+{
+	struct hv_iommu_viommu *hv_viommu = to_hv_iommu_viommu(viommu);
+	struct iommu_hwpt_external external = {};
+	struct hv_domain *hvdom;
+	int rc;
+
+	if (viommu->type != IOMMU_VIOMMU_TYPE_HYPERVISOR)
+		return ERR_PTR(-EOPNOTSUPP);
+	if (flags)
+		return ERR_PTR(-EOPNOTSUPP);
+	if (!user_data || user_data->type != IOMMU_HWPT_DATA_EXTERNAL)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	rc = iommu_copy_struct_from_user(&external, user_data,
+					 IOMMU_HWPT_DATA_EXTERNAL, flags);
+	if (rc)
+		return ERR_PTR(rc);
+	if (external.flags || external.__reserved)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	hvdom = kzalloc_obj(*hvdom, GFP_KERNEL_ACCOUNT);
+	if (!hvdom)
+		return ERR_PTR(-ENOMEM);
+
+	hvdom->iommu_dom.type = IOMMU_DOMAIN_EXTERNAL;
+	hvdom->iommu_dom.ops = &hv_iommu_external_domain_ops;
+	hvdom->iommu_dom.pgsize_bitmap = HV_IOMMU_PGSIZES;
+	hvdom->partid = hv_viommu->partid;
+	hvdom->viommu = viommu;
+
+	return &hvdom->iommu_dom;
+}
+
 static const struct iommufd_viommu_ops hv_iommu_hypervisor_viommu_ops = {
 	.destroy = hv_iommu_viommu_destroy,
+	.alloc_domain_external = hv_iommu_alloc_domain_external,
 };
+
+int hv_iommufd_prepare_attach(struct iommufd_viommu *viommu)
+{
+	struct hv_iommu_viommu *hv_viommu = to_hv_iommu_viommu(viommu);
+
+	return mshv_partition_file_prepare_attach(hv_viommu->vm_file);
+}
 
 size_t hv_iommufd_get_viommu_size(struct device *dev,
 				  enum iommu_viommu_type viommu_type)
