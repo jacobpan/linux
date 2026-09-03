@@ -685,9 +685,11 @@ __iommu_copy_struct_to_user(const struct iommu_user_data *dst_data,
  *                   driver-level vIOMMU structure related to the core one
  * @viommu_init: Init the driver-level struct of an iommufd_viommu on a physical
  *               IOMMU instance @viommu->iommu_dev, as the set of virtualization
- *               resources shared/passed to user space IOMMU instance. Associate
- *               it with a nesting @parent_domain. It is required for driver to
- *               set @viommu->ops pointing to its own viommu_ops
+ *               resources shared/passed to user space IOMMU instance.
+ *               @parent_domain may be NULL for a parentless vIOMMU type; a
+ *               driver advertising such a type through @get_viommu_size must
+ *               accept a NULL parent. It is required for driver to set
+ *               @viommu->ops pointing to its own viommu_ops
  * @owner: Driver module providing these ops
  * @identity_domain: An always available, always attachable identity
  *                   translation.

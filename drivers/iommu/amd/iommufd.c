@@ -34,6 +34,10 @@ void *amd_iommufd_hw_info(struct device *dev, u32 *length, enum iommu_hw_info_ty
 
 size_t amd_iommufd_get_viommu_size(struct device *dev, enum iommu_viommu_type viommu_type)
 {
+	/* AMD vIOMMUs require a nesting parent; hypervisor vIOMMUs are parentless. */
+	if (viommu_type == IOMMU_VIOMMU_TYPE_HYPERVISOR)
+		return 0;
+
 	return VIOMMU_STRUCT_SIZE(struct amd_iommu_viommu, core);
 }
 
@@ -41,9 +45,13 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 			    const struct iommu_user_data *user_data)
 {
 	unsigned long flags;
-	struct protection_domain *pdom = to_pdomain(parent);
+	struct protection_domain *pdom;
 	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
 
+	if (!parent)
+		return -EOPNOTSUPP;
+
+	pdom = to_pdomain(parent);
 	xa_init_flags(&aviommu->gdomid_array, XA_FLAGS_ALLOC1);
 	aviommu->parent = pdom;
 
