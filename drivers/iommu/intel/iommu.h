@@ -1191,6 +1191,12 @@ domain_add_dev_pasid(struct iommu_domain *domain,
 		     struct device *dev, ioasid_t pasid);
 void domain_remove_dev_pasid(struct iommu_domain *domain,
 			     struct device *dev, ioasid_t pasid);
+int intel_iommu_setup_pass_through(struct device *dev);
+size_t intel_iommu_get_viommu_size(struct device *dev,
+				   enum iommu_viommu_type viommu_type);
+int intel_iommu_viommu_init(struct iommufd_viommu *viommu,
+			    struct iommu_domain *parent_domain,
+			    const struct iommu_user_data *user_data);
 
 int __domain_setup_first_level(struct intel_iommu *iommu, struct device *dev,
 			       ioasid_t pasid, u16 did, phys_addr_t fsptptr,

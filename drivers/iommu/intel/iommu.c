@@ -22,7 +22,6 @@
 #include <linux/spinlock.h>
 #include <linux/syscore_ops.h>
 #include <linux/tboot.h>
-#include <uapi/linux/iommufd.h>
 
 #include "iommu.h"
 #include "../dma-iommu.h"
@@ -3846,7 +3845,7 @@ static int context_setup_pass_through_cb(struct pci_dev *pdev, u16 alias, void *
 	return context_setup_pass_through(dev, PCI_BUS_NUM(alias), alias & 0xff);
 }
 
-static int device_setup_pass_through(struct device *dev)
+int intel_iommu_setup_pass_through(struct device *dev)
 {
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 
@@ -3881,7 +3880,7 @@ static int identity_domain_attach_dev(struct iommu_domain *domain,
 	if (sm_supported(iommu))
 		ret = intel_pasid_setup_pass_through(iommu, dev, IOMMU_NO_PASID);
 	else
-		ret = device_setup_pass_through(dev);
+		ret = intel_iommu_setup_pass_through(dev);
 
 	if (!ret)
 		info->domain_attached = true;
@@ -3961,6 +3960,8 @@ const struct iommu_ops intel_iommu_ops = {
 	.is_attach_deferred	= intel_iommu_is_attach_deferred,
 	.def_domain_type	= device_def_domain_type,
 	.page_response		= intel_iommu_page_response,
+	.get_viommu_size	= intel_iommu_get_viommu_size,
+	.viommu_init		= intel_iommu_viommu_init,
 };
 
 static void quirk_iommu_igfx(struct pci_dev *dev)
