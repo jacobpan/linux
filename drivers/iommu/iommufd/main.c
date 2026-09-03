@@ -736,6 +736,10 @@ static const struct iommufd_object_ops iommufd_object_ops[] = {
 		.destroy = iommufd_hwpt_nested_destroy,
 		.abort = iommufd_hwpt_nested_abort,
 	},
+	[IOMMUFD_OBJ_HWPT_EXTERNAL] = {
+		.destroy = iommufd_hwpt_external_destroy,
+		.abort = iommufd_hwpt_external_abort,
+	},
 	[IOMMUFD_OBJ_IOAS] = {
 		.destroy = iommufd_ioas_destroy,
 	},
