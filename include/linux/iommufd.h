@@ -31,6 +31,7 @@ enum iommufd_object_type {
 	IOMMUFD_OBJ_DEVICE,
 	IOMMUFD_OBJ_HWPT_PAGING,
 	IOMMUFD_OBJ_HWPT_NESTED,
+	IOMMUFD_OBJ_HWPT_EXTERNAL,
 	IOMMUFD_OBJ_IOAS,
 	IOMMUFD_OBJ_ACCESS,
 	IOMMUFD_OBJ_FAULT,
@@ -149,6 +150,12 @@ struct iommufd_hw_queue {
  *                       must be defined in include/uapi/linux/iommufd.h.
  *                       It must fully initialize the new iommu_domain before
  *                       returning. Upon failure, ERR_PTR must be returned.
+ * @alloc_domain_external: Allocate a IOMMU_DOMAIN_EXTERNAL on a vIOMMU that holds
+ *                       the VM identity for an external attach domain. @user_data must
+ *                       be defined in
+ *                       include/uapi/linux/iommufd.h. It must fully initialize
+ *                       the new iommu_domain before returning. Upon failure,
+ *                       ERR_PTR must be returned.
  * @cache_invalidate: Flush hardware cache used by a vIOMMU. It can be used for
  *                    any IOMMU hardware specific cache: TLB and device cache.
  *                    The @array passes in the cache invalidation requests, in
@@ -186,6 +193,10 @@ struct iommufd_viommu_ops {
 	struct iommu_domain *(*alloc_domain_nested)(
 		struct iommufd_viommu *viommu, u32 flags,
 		const struct iommu_user_data *user_data);
+	struct iommu_domain *
+		(*alloc_domain_external)(struct iommufd_viommu *viommu,
+					 u32 flags,
+					 const struct iommu_user_data *user_data);
 	int (*cache_invalidate)(struct iommufd_viommu *viommu,
 				struct iommu_user_data_array *array);
 	const size_t vdevice_size;
