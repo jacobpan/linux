@@ -9,6 +9,7 @@
 #include <linux/interval_tree.h>
 #include <linux/hyperv.h>
 #include "../dma-iommu.h"
+#include "hv-iommu.h"
 #include <asm/iommu.h>
 #include <asm/mshyperv.h>
 
@@ -34,17 +35,6 @@ __setup("hv_no_attdev", setup_hv_no_attdev);
 
 /* Iommu device that we export to the world. HyperV supports max of one */
 static struct iommu_device hv_virt_iommu;
-
-struct hv_domain {
-	struct iommu_domain iommu_dom;
-	u32 domid_num;			      /* as opposed to domain_id.type */
-	bool attached_dom;		      /* is this direct attached dom? */
-	u64 partid;			      /* partition id */
-	spinlock_t mappings_lock;	      /* protects mappings_tree */
-	struct rb_root_cached mappings_tree;  /* iova to pa lookup tree */
-};
-
-#define to_hv_domain(d) container_of(d, struct hv_domain, iommu_dom)
 
 struct hv_iommu_mapping {
 	phys_addr_t paddr;
@@ -91,13 +81,12 @@ static bool hv_special_domain(struct hv_domain *hvdom)
 	return hvdom == &hv_def_identity_dom || hvdom == &hv_null_dom;
 }
 
-struct iommu_domain_geometry default_geometry = (struct iommu_domain_geometry) {
+const struct iommu_domain_geometry hv_iommu_hv_iommu_default_geometry = {
 	.aperture_start = 0,
 	.aperture_end = -1UL,
 	.force_aperture = true,
 };
 
-#define HV_IOMMU_PGSIZES SZ_4K  /* for now, to be enhanced */
 
 static u32 unique_id;	      /* unique numeric id of a new domain */
 
@@ -270,7 +259,7 @@ static struct iommu_domain *hv_iommu_domain_alloc_paging(struct device *dev)
 
 	hvdom->domid_num = unique_id;
 	hvdom->partid = hv_get_current_partid();
-	hvdom->iommu_dom.geometry = default_geometry;
+	hvdom->iommu_dom.geometry = hv_iommu_default_geometry;
 	hvdom->iommu_dom.pgsize_bitmap = HV_IOMMU_PGSIZES;
 
 	/* For guests, by default we do direct attaches, so no domain in hyp */
@@ -857,13 +846,13 @@ static void __init hv_initialize_special_domains(void)
 	hv_def_identity_dom.iommu_dom.type = IOMMU_DOMAIN_IDENTITY;
 	hv_def_identity_dom.iommu_dom.ops = &hv_special_domain_ops;
 	hv_def_identity_dom.iommu_dom.owner = &hv_iommu_ops;
-	hv_def_identity_dom.iommu_dom.geometry = default_geometry;
+	hv_def_identity_dom.iommu_dom.geometry = hv_iommu_default_geometry;
 	hv_def_identity_dom.domid_num = HV_DEVICE_DOMAIN_ID_S2_DEFAULT; /* 0 */
 
 	hv_null_dom.iommu_dom.type = IOMMU_DOMAIN_BLOCKED;
 	hv_null_dom.iommu_dom.ops = &hv_special_domain_ops;
 	hv_null_dom.iommu_dom.owner = &hv_iommu_ops;
-	hv_null_dom.iommu_dom.geometry = default_geometry;
+	hv_null_dom.iommu_dom.geometry = hv_iommu_default_geometry;
 	hv_null_dom.domid_num = HV_DEVICE_DOMAIN_ID_S2_NULL;  /* INTMAX */
 }
 
