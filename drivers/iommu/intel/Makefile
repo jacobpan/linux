@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
-obj-y += iommu.o pasid.o nested.o cache.o prq.o
+obj-y += iommu.o pasid.o nested.o cache.o prq.o iommufd.o
 obj-$(CONFIG_DMAR_TABLE) += dmar.o trace.o
 obj-$(CONFIG_DMAR_PERF) += perf.o
 obj-$(CONFIG_INTEL_IOMMU_DEBUGFS) += debugfs.o
