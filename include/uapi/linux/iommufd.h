@@ -1095,6 +1095,7 @@ struct iommu_fault_alloc {
  * @IOMMU_VIOMMU_TYPE_ARM_SMMUV3: ARM SMMUv3 driver specific type
  * @IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV: NVIDIA Tegra241 CMDQV (extension for ARM
  *                                    SMMUv3) enabled ARM SMMUv3 type
+ * @IOMMU_VIOMMU_TYPE_HYPERVISOR: Hypervisor-backed vIOMMU type
  */
 enum iommu_viommu_type {
 	IOMMU_VIOMMU_TYPE_DEFAULT = 0,
@@ -1105,6 +1106,7 @@ enum iommu_viommu_type {
 	 *   VMM must wire the HYP_OWN bit to 0 in guest VINTF_CONFIG register
 	 */
 	IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV = 2,
+	IOMMU_VIOMMU_TYPE_HYPERVISOR = 3,
 };
 
 /**
@@ -1124,12 +1126,26 @@ struct iommu_viommu_tegra241_cmdqv {
 };
 
 /**
+ * struct iommu_viommu_hypervisor - Hypervisor-backed virtual IOMMU
+ *                            (IOMMU_VIOMMU_TYPE_HYPERVISOR)
+ * @vm_fd: Hypervisor VM/partition file descriptor
+ * @flags: Must be 0
+ * @__reserved: Must be 0
+ */
+struct iommu_viommu_hypervisor {
+	__s32 vm_fd;
+	__u32 flags;
+	__aligned_u64 __reserved;
+};
+
+/**
  * struct iommu_viommu_alloc - ioctl(IOMMU_VIOMMU_ALLOC)
  * @size: sizeof(struct iommu_viommu_alloc)
  * @flags: Must be 0
  * @type: Type of the virtual IOMMU. Must be defined in enum iommu_viommu_type
  * @dev_id: The device's physical IOMMU will be used to back the virtual IOMMU
- * @hwpt_id: ID of a nesting parent HWPT to associate to
+ * @hwpt_id: ID of a nesting parent HWPT to associate to. This field is
+ *           ignored if the vIOMMU type does not use a nesting parent
  * @out_viommu_id: Output virtual IOMMU ID for the allocated object
  * @data_len: Length of the type specific data
  * @__reserved: Must be 0
@@ -1146,6 +1162,7 @@ struct iommu_viommu_tegra241_cmdqv {
  * - Delivery of paravirtualized invalidation
  * - Direct assigned invalidation queues
  * - Direct assigned interrupts
+ * - Hypervisor controlled translation, e.g. for Type-1 Bare-metal hypervisors
  */
 struct iommu_viommu_alloc {
 	__u32 size;
