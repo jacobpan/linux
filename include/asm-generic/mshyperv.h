@@ -415,6 +415,16 @@ static inline u64 mshv_current_partid(void)
 }
 #endif /* CONFIG_MSHV_ROOT */
 
+struct file;
+#if IS_REACHABLE(CONFIG_MSHV_ROOT)
+u64 mshv_partition_file_get_partid(struct file *file);
+#else
+static inline u64 mshv_partition_file_get_partid(struct file *file)
+{
+	return HV_PARTITION_ID_INVALID;
+}
+#endif
+
 static inline int hv_deposit_memory(u64 partition_id, u64 status)
 {
 	return hv_deposit_memory_node(NUMA_NO_NODE, partition_id, status);
