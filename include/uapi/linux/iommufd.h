@@ -1096,6 +1096,11 @@ struct iommu_fault_alloc {
  * @IOMMU_VIOMMU_TYPE_ARM_SMMUV3: ARM SMMUv3 driver specific type
  * @IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV: NVIDIA Tegra241 CMDQV (extension for ARM
  *                                    SMMUv3) enabled ARM SMMUv3 type
+ * @IOMMU_VIOMMU_TYPE_HYPERVISOR: Hypervisor-backed per-VM IOMMU object
+ *                                tracks a file-based VM partition
+ *                                reference; also used to bind and organize
+ *                                vDEVICEs for a guest VM partition, with or
+ *                                without a guest vIOMMU.
  */
 enum iommu_viommu_type {
 	IOMMU_VIOMMU_TYPE_DEFAULT = 0,
@@ -1106,6 +1111,7 @@ enum iommu_viommu_type {
 	 *   VMM must wire the HYP_OWN bit to 0 in guest VINTF_CONFIG register
 	 */
 	IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV = 2,
+	IOMMU_VIOMMU_TYPE_HYPERVISOR = 3,
 };
 
 /**
@@ -1122,6 +1128,21 @@ enum iommu_viommu_type {
 struct iommu_viommu_tegra241_cmdqv {
 	__aligned_u64 out_vintf_mmap_offset;
 	__aligned_u64 out_vintf_mmap_length;
+};
+
+/**
+ * struct iommu_viommu_hypervisor - Hypervisor-backed virtual IOMMU
+ *                            (IOMMU_VIOMMU_TYPE_HYPERVISOR)
+ * @vm_fd: Hypervisor VM/partition file descriptor
+ * @flags: Must be 0 for now. Future flags may indicate the presence of a guest
+ *         virtual IOMMU, allowing hypervisor pvIOMMU drivers to enable
+ *         PASID/ATS and prepare for nested translation as appropriate.
+ * @__reserved: Must be 0
+ */
+struct iommu_viommu_hypervisor {
+	__s32 vm_fd;
+	__u32 flags;
+	__aligned_u64 __reserved;
 };
 
 /**
@@ -1148,6 +1169,7 @@ struct iommu_viommu_tegra241_cmdqv {
  * - Delivery of paravirtualized invalidation
  * - Direct assigned invalidation queues
  * - Direct assigned interrupts
+ * - Hypervisor controlled translation, e.g. for Type-1 Bare-metal hypervisors
  */
 struct iommu_viommu_alloc {
 	__u32 size;

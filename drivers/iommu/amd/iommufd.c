@@ -41,6 +41,9 @@ static size_t amd_iommufd_get_viommu_size(struct device *dev,
 const struct iommufd_viommu_ops *
 amd_iommufd_get_viommu_ops(struct device *dev, enum iommu_viommu_type viommu_type)
 {
+	if (viommu_type == IOMMU_VIOMMU_TYPE_HYPERVISOR)
+		return NULL;
+
 	return &amd_viommu_ops;
 }
 
