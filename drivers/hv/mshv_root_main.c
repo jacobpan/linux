@@ -2160,6 +2160,33 @@ u64 mshv_current_partid(void)
 }
 EXPORT_SYMBOL_GPL(mshv_current_partid);
 
+static bool mshv_partition_file_is_valid(struct file *file)
+{
+	if (!file)
+		return false;
+
+	if (file->f_op == &mshv_partition_fops)
+		return true;
+
+	return false;
+}
+
+static u64 mshv_partition_file_get_partid_impl(struct file *file)
+{
+	if (file->f_op == &mshv_partition_fops) {
+		struct mshv_partition *partition = file->private_data;
+
+		return partition ? partition->pt_id : HV_PARTITION_ID_INVALID;
+	}
+
+	return HV_PARTITION_ID_INVALID;
+}
+
+static const struct mshv_partition_file_ops mshv_partition_file_ops = {
+	.file_is_partition = mshv_partition_file_is_valid,
+	.get_partid = mshv_partition_file_get_partid_impl,
+};
+
 static int
 add_partition(struct mshv_partition *partition)
 {
@@ -2599,9 +2626,13 @@ static int __init mshv_parent_partition_init(void)
 	if (hv_get_hypervisor_version(&version_info))
 		return -ENODEV;
 
-	ret = misc_register(&mshv_dev);
+	ret = mshv_partition_file_ops_register(&mshv_partition_file_ops);
 	if (ret)
 		return ret;
+
+	ret = misc_register(&mshv_dev);
+	if (ret)
+		goto unregister_file_ops;
 
 	dev = mshv_dev.this_device;
 
@@ -2652,6 +2683,8 @@ synic_cleanup:
 	mshv_synic_exit();
 device_deregister:
 	misc_deregister(&mshv_dev);
+unregister_file_ops:
+	mshv_partition_file_ops_unregister(&mshv_partition_file_ops);
 	return ret;
 }
 
@@ -2661,6 +2694,7 @@ static void __exit mshv_parent_partition_exit(void)
 	mshv_port_table_fini();
 	mshv_debugfs_exit();
 	misc_deregister(&mshv_dev);
+	mshv_partition_file_ops_unregister(&mshv_partition_file_ops);
 	mshv_irqfd_wq_cleanup();
 	root_scheduler_deinit();
 	mshv_synic_exit();

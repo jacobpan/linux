@@ -17,6 +17,7 @@
 #include <linux/export.h>
 #include <linux/bitfield.h>
 #include <linux/cpumask.h>
+#include <linux/fs.h>
 #include <linux/sched/task_stack.h>
 #include <linux/panic_notifier.h>
 #include <linux/ptrace.h>
@@ -24,6 +25,7 @@
 #include <linux/efi.h>
 #include <linux/kdebug.h>
 #include <linux/kmsg_dump.h>
+#include <linux/mutex.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/dma-map-ops.h>
@@ -36,6 +38,73 @@ EXPORT_SYMBOL_GPL(hv_current_partition_id);
 
 enum hv_partition_type hv_curr_partition_type;
 EXPORT_SYMBOL_GPL(hv_curr_partition_type);
+
+static DEFINE_MUTEX(mshv_partition_file_ops_lock);
+static const struct mshv_partition_file_ops *mshv_partition_file_ops;
+
+int mshv_partition_file_ops_register(const struct mshv_partition_file_ops *ops)
+{
+	int ret = 0;
+
+	if (!ops || !ops->file_is_partition || !ops->get_partid)
+		return -EINVAL;
+
+	mutex_lock(&mshv_partition_file_ops_lock);
+	if (mshv_partition_file_ops)
+		ret = -EBUSY;
+	else
+		mshv_partition_file_ops = ops;
+	mutex_unlock(&mshv_partition_file_ops_lock);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(mshv_partition_file_ops_register);
+
+void
+mshv_partition_file_ops_unregister(const struct mshv_partition_file_ops *ops)
+{
+	mutex_lock(&mshv_partition_file_ops_lock);
+	if (mshv_partition_file_ops == ops)
+		mshv_partition_file_ops = NULL;
+	mutex_unlock(&mshv_partition_file_ops_lock);
+}
+EXPORT_SYMBOL_GPL(mshv_partition_file_ops_unregister);
+
+bool file_is_mshv_partition(struct file *file)
+{
+	const struct mshv_partition_file_ops *ops;
+	bool ret = false;
+
+	if (!file)
+		return false;
+
+	mutex_lock(&mshv_partition_file_ops_lock);
+	ops = mshv_partition_file_ops;
+	if (ops)
+		ret = ops->file_is_partition(file);
+	mutex_unlock(&mshv_partition_file_ops_lock);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(file_is_mshv_partition);
+
+u64 mshv_partition_file_get_partid(struct file *file)
+{
+	const struct mshv_partition_file_ops *ops;
+	u64 ret = HV_PARTITION_ID_INVALID;
+
+	if (!file)
+		return HV_PARTITION_ID_INVALID;
+
+	mutex_lock(&mshv_partition_file_ops_lock);
+	ops = mshv_partition_file_ops;
+	if (ops && ops->file_is_partition(file))
+		ret = ops->get_partid(file);
+	mutex_unlock(&mshv_partition_file_ops_lock);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(mshv_partition_file_get_partid);
 
 /*
  * ms_hyperv and hv_nested are defined here with other

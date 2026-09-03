@@ -401,6 +401,41 @@ static inline u64 mshv_current_partid(void)
 }
 #endif /* CONFIG_MSHV_ROOT */
 
+struct file;
+struct mshv_partition_file_ops {
+	bool (*file_is_partition)(struct file *file);
+	u64 (*get_partid)(struct file *file);
+};
+
+#if IS_ENABLED(CONFIG_HYPERV)
+int mshv_partition_file_ops_register(const struct mshv_partition_file_ops *ops);
+void
+mshv_partition_file_ops_unregister(const struct mshv_partition_file_ops *ops);
+bool file_is_mshv_partition(struct file *file);
+u64 mshv_partition_file_get_partid(struct file *file);
+#else
+static inline int
+mshv_partition_file_ops_register(const struct mshv_partition_file_ops *ops)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void
+mshv_partition_file_ops_unregister(const struct mshv_partition_file_ops *ops)
+{
+}
+
+static inline bool file_is_mshv_partition(struct file *file)
+{
+	return false;
+}
+
+static inline u64 mshv_partition_file_get_partid(struct file *file)
+{
+	return HV_PARTITION_ID_INVALID;
+}
+#endif
+
 static inline int hv_deposit_memory(u64 partition_id, u64 status)
 {
 	return hv_deposit_memory_node(NUMA_NO_NODE, partition_id, status);
