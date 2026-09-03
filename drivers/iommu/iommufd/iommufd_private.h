@@ -403,6 +403,11 @@ struct iommufd_hwpt_nested {
 	struct iommufd_viommu *viommu;
 };
 
+struct iommufd_hwpt_external {
+	struct iommufd_hw_pagetable common;
+	struct iommufd_viommu *viommu;
+};
+
 static inline bool hwpt_is_paging(struct iommufd_hw_pagetable *hwpt)
 {
 	return hwpt->obj.type == IOMMUFD_OBJ_HWPT_PAGING;
@@ -465,6 +470,8 @@ void iommufd_hwpt_paging_destroy(struct iommufd_object *obj);
 void iommufd_hwpt_paging_abort(struct iommufd_object *obj);
 void iommufd_hwpt_nested_destroy(struct iommufd_object *obj);
 void iommufd_hwpt_nested_abort(struct iommufd_object *obj);
+void iommufd_hwpt_external_destroy(struct iommufd_object *obj);
+void iommufd_hwpt_external_abort(struct iommufd_object *obj);
 int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd);
 int iommufd_hwpt_invalidate(struct iommufd_ucmd *ucmd);
 
