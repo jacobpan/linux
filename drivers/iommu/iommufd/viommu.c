@@ -10,7 +10,8 @@ void iommufd_viommu_destroy(struct iommufd_object *obj)
 
 	if (viommu->ops && viommu->ops->destroy)
 		viommu->ops->destroy(viommu);
-	refcount_dec(&viommu->hwpt->common.obj.users);
+	if (viommu->hwpt)
+		refcount_dec(&viommu->hwpt->common.obj.users);
 	xa_destroy(&viommu->vdevs);
 }
 
@@ -63,15 +64,19 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 		goto out_put_idev;
 	}
 
-	hwpt_paging = iommufd_get_hwpt_paging(ucmd, cmd->hwpt_id);
-	if (IS_ERR(hwpt_paging)) {
-		rc = PTR_ERR(hwpt_paging);
-		goto out_put_idev;
-	}
+	if (cmd->type == IOMMU_VIOMMU_TYPE_HYPERVISOR) {
+		hwpt_paging = NULL;
+	} else {
+		hwpt_paging = iommufd_get_hwpt_paging(ucmd, cmd->hwpt_id);
+		if (IS_ERR(hwpt_paging)) {
+			rc = PTR_ERR(hwpt_paging);
+			goto out_put_idev;
+		}
 
-	if (!hwpt_paging->nest_parent) {
-		rc = -EINVAL;
-		goto out_put_hwpt;
+		if (!hwpt_paging->nest_parent) {
+			rc = -EINVAL;
+			goto out_put_hwpt;
+		}
 	}
 
 	viommu = (struct iommufd_viommu *)_iommufd_object_alloc_ucmd(
@@ -85,7 +90,8 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 	viommu->type = cmd->type;
 	viommu->ictx = ucmd->ictx;
 	viommu->hwpt = hwpt_paging;
-	refcount_inc(&viommu->hwpt->common.obj.users);
+	if (viommu->hwpt)
+		refcount_inc(&viommu->hwpt->common.obj.users);
 	INIT_LIST_HEAD(&viommu->veventqs);
 	init_rwsem(&viommu->veventqs_rwsem);
 	/*
@@ -95,7 +101,8 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 	 */
 	viommu->iommu_dev = iommu_dev;
 
-	rc = ops->viommu_init(viommu, hwpt_paging->common.domain,
+	rc = ops->viommu_init(viommu,
+			      hwpt_paging ? hwpt_paging->common.domain : NULL,
 			      user_data.len ? &user_data : NULL);
 	if (rc)
 		goto out_put_hwpt;
@@ -110,7 +117,8 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
 
 out_put_hwpt:
-	iommufd_put_object(ucmd->ictx, &hwpt_paging->common.obj);
+	if (hwpt_paging)
+		iommufd_put_object(ucmd->ictx, &hwpt_paging->common.obj);
 out_put_idev:
 	iommufd_put_object(ucmd->ictx, &idev->obj);
 	return rc;
