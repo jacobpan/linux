@@ -65,6 +65,7 @@ hv_iommu_alloc_domain_external(struct iommufd_viommu *viommu, u32 flags,
 	hvdom->iommu_dom.geometry = hv_iommu_default_geometry;
 	hvdom->iommu_dom.pgsize_bitmap = HV_IOMMU_PGSIZES;
 	hvdom->partid = hv_viommu->partid;
+	hvdom->viommu = viommu;
 
 	return &hvdom->iommu_dom;
 }

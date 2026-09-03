@@ -21,6 +21,7 @@ struct hv_domain {
 	struct iommu_domain iommu_dom;
 	u32 domid_num;			      /* as opposed to domain_id.type */
 	u64 partid;			      /* partition id for external attach */
+	struct iommufd_viommu *viommu;
 	spinlock_t mappings_lock;	      /* protects mappings_tree */
 	struct rb_root_cached mappings_tree;  /* iova to pa lookup tree */
 };

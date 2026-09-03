@@ -8,6 +8,7 @@
 #include <linux/dma-map-ops.h>
 #include <linux/interval_tree.h>
 #include <linux/hyperv.h>
+#include <linux/iommufd.h>
 #include "../dma-iommu.h"
 #include "hv-iommu.h"
 #include <asm/iommu.h>
@@ -339,7 +340,8 @@ static int hv_iommu_att_dev2dom(struct hv_domain *hvdom, struct pci_dev *pdev)
 }
 
 /* Caller must have validated that dev is a valid pci dev */
-static int hv_iommu_external_attach_device(struct pci_dev *pdev, u64 ptid)
+static int hv_iommu_external_attach_device(struct pci_dev *pdev,
+					   u64 ptid, unsigned long vdev_id)
 {
 	struct hv_input_attach_device *input;
 	u64 status;
@@ -372,8 +374,7 @@ static int hv_iommu_external_attach_device(struct pci_dev *pdev, u64 ptid)
 		 * used instead of the BDF. It is a required parameter.
 		 */
 		input->attdev_flags.logical_id = 1;
-		input->logical_devid =
-			   hv_build_devid_oftype(pdev, HV_DEVICE_TYPE_LOGICAL);
+		input->logical_devid = vdev_id;
 
 		status = hv_do_hypercall(HVCALL_ATTACH_DEVICE, input, NULL);
 		local_irq_restore(flags);
@@ -440,6 +441,7 @@ static int hv_iommu_external_attach_dev(struct iommu_domain *immdom,
 {
 	struct hv_domain *hvdom_new = to_hv_domain(immdom);
 	struct hv_domain *hvdom_prev = old ? to_hv_domain(old) : NULL;
+	unsigned long vdev_id;
 	struct pci_dev *pdev;
 	int rc;
 
@@ -449,11 +451,16 @@ static int hv_iommu_external_attach_dev(struct iommu_domain *immdom,
 
 	pdev = to_pci_dev(dev);
 
+	rc = iommufd_viommu_get_vdev_id(hvdom_new->viommu, dev, &vdev_id);
+	if (rc)
+		return rc;
+
 	if (hvdom_prev)
 		if (!hv_l1vh_partition() || !hv_special_domain(hvdom_prev))
 			hv_iommu_detach_dev(hvdom_prev, dev);
 
-	rc = hv_iommu_external_attach_device(pdev, hvdom_new->partid);
+	rc = hv_iommu_external_attach_device(pdev, hvdom_new->partid,
+					     vdev_id);
 	if (rc == 0)
 		dev_iommu_priv_set(dev, hvdom_new);  /* sets "private" field */
 	else
