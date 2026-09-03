@@ -7,6 +7,7 @@
 #include <linux/dma-map-ops.h>
 #include <linux/interval_tree.h>
 #include <linux/hyperv.h>
+#include "hv-iommu.h"
 #include <asm/iommu.h>
 #include <asm/mshyperv.h>
 #include "../dma-iommu.h"
@@ -30,15 +31,6 @@ static struct iommu_domain_ops hv_paging_domain_ops;
 
 /* IOMMU device that we export to the world. HyperV supports max of one */
 static struct iommu_device hv_virt_iommu;
-
-struct hv_domain {
-	struct iommu_domain iommu_dom;
-	u32 domid_num;			      /* as opposed to domain_id.type */
-	spinlock_t mappings_lock;	      /* protects mappings_tree */
-	struct rb_root_cached mappings_tree;  /* iova to pa lookup tree */
-};
-
-#define to_hv_domain(d) container_of(d, struct hv_domain, iommu_dom)
 
 struct hv_iommu_mapping {
 	phys_addr_t paddr;
@@ -67,7 +59,6 @@ static bool hv_special_domain(struct hv_domain *hvdom)
 	return hvdom == &hv_def_identity_dom || hvdom == &hv_def_blocked_dom;
 }
 
-#define HV_IOMMU_PGSIZES SZ_4K		/* for now, to be enhanced */
 static atomic_t hv_unique_id;		/* unique numeric id for a new domain */
 
 static bool hv_iommu_capable(struct device *dev, enum iommu_cap cap)
