@@ -1,0 +1,91 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Hyper-V root vIOMMU IOMMUFD support.
+ * Copyright (C) 2026, Microsoft, Inc.
+ */
+
+#include <linux/file.h>
+#include <linux/iommufd.h>
+#include <linux/slab.h>
+
+#include <asm/mshyperv.h>
+
+#include "hv-iommu.h"
+
+struct hv_iommu_viommu {
+	struct iommufd_viommu core;
+	struct file *vm_file;
+	u64 partid;
+};
+
+static const struct iommufd_viommu_ops hv_iommu_hypervisor_viommu_ops;
+
+static struct hv_iommu_viommu *
+to_hv_iommu_viommu(struct iommufd_viommu *viommu)
+{
+	return container_of(viommu, struct hv_iommu_viommu, core);
+}
+
+static void hv_iommu_viommu_destroy(struct iommufd_viommu *viommu)
+{
+	struct hv_iommu_viommu *hv_viommu = to_hv_iommu_viommu(viommu);
+
+	fput(hv_viommu->vm_file);
+}
+
+static const struct iommufd_viommu_ops hv_iommu_hypervisor_viommu_ops = {
+	.destroy = hv_iommu_viommu_destroy,
+};
+
+size_t hv_iommufd_get_viommu_size(struct device *dev,
+				  enum iommu_viommu_type viommu_type)
+{
+	if (viommu_type != IOMMU_VIOMMU_TYPE_HYPERVISOR)
+		return 0;
+	return VIOMMU_STRUCT_SIZE(struct hv_iommu_viommu, core);
+}
+
+int hv_iommufd_viommu_init(struct iommufd_viommu *viommu,
+			   struct iommu_domain *parent_domain,
+			   const struct iommu_user_data *user_data)
+{
+	struct hv_iommu_viommu *hv_viommu = to_hv_iommu_viommu(viommu);
+	struct iommu_viommu_hypervisor hypervisor = {};
+	int rc;
+
+	if (viommu->type != IOMMU_VIOMMU_TYPE_HYPERVISOR)
+		return -EOPNOTSUPP;
+	if (parent_domain || !user_data)
+		return -EINVAL;
+
+	rc = iommu_copy_struct_from_user(&hypervisor, user_data,
+					 IOMMU_VIOMMU_TYPE_HYPERVISOR, vm_fd);
+	if (rc)
+		return rc;
+	if (hypervisor.flags || hypervisor.__reserved)
+		return -EOPNOTSUPP;
+
+	hv_viommu->vm_file = fget(hypervisor.vm_fd);
+	if (!hv_viommu->vm_file)
+		return -EBADF;
+
+	if (!file_is_mshv_partition(hv_viommu->vm_file)) {
+		rc = -EINVAL;
+		goto out_put_file;
+	}
+
+	hv_viommu->partid =
+		mshv_partition_file_get_partid(hv_viommu->vm_file);
+	if (hv_viommu->partid == HV_PARTITION_ID_INVALID) {
+		rc = -EINVAL;
+		goto out_put_file;
+	}
+
+	viommu->ops = &hv_iommu_hypervisor_viommu_ops;
+	return 0;
+
+out_put_file:
+	fput(hv_viommu->vm_file);
+	hv_viommu->vm_file = NULL;
+	return rc;
+}
