@@ -820,6 +820,8 @@ static int hv_iommu_def_domain_type(struct device *dev)
 static struct iommu_ops hv_iommu_ops = {
 	.capable	    = hv_iommu_capable,
 	.domain_alloc_paging	= hv_iommu_domain_alloc_paging,
+	.get_viommu_size    = hv_iommufd_get_viommu_size,
+	.viommu_init	    = hv_iommufd_viommu_init,
 	.probe_device	    = hv_iommu_probe_device,
 	.probe_finalize     = hv_iommu_probe_finalize,
 	.release_device     = hv_iommu_release_device,
