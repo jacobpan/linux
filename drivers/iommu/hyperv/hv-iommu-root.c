@@ -9,6 +9,7 @@
 #include <linux/hyperv.h>
 #include <linux/iommufd.h>
 #include "hv-iommu.h"
+#include <asm/hypervisor.h>
 #include <asm/iommu.h>
 #include <asm/mshyperv.h>
 #include "../dma-iommu.h"
@@ -54,6 +55,11 @@ struct hv_iommu_mapping {
  */
 static struct hv_domain hv_def_identity_dom;
 static struct hv_domain hv_def_blocked_dom;
+
+static bool hv_iommu_kvm_test_mode(void)
+{
+	return x86_hyper_type == X86_HYPER_KVM;
+}
 
 static bool hv_special_domain(struct hv_domain *hvdom)
 {
@@ -138,11 +144,16 @@ static int hv_iommu_create_hyp_devdom(struct hv_domain *hvdom)
 {
 	u64 status;
 	struct hv_input_device_domain *ddp;
+	struct hv_input_create_device_domain test_input;
 	struct hv_input_create_device_domain *input;
 	unsigned long flags;
 
-	local_irq_save(flags);
-	input = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	if (hv_iommu_kvm_test_mode())
+		input = &test_input;
+	else {
+		local_irq_save(flags);
+		input = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	}
 	memset(input, 0, sizeof(*input));
 
 	ddp = &input->device_domain;
@@ -152,6 +163,12 @@ static int hv_iommu_create_hyp_devdom(struct hv_domain *hvdom)
 
 	input->create_device_domain_flags.forward_progress_required = 1;
 	input->create_device_domain_flags.inherit_owning_vtl = 0;
+
+	if (hv_iommu_kvm_test_mode()) {
+		pr_info("Hyper-V: KVM test: create domain %u\n",
+			ddp->domain_id.id);
+		return 0;
+	}
 
 	status = hv_do_hypercall(HVCALL_CREATE_DEVICE_DOMAIN, input, NULL);
 
@@ -209,6 +226,7 @@ static void hv_iommu_domain_free(struct iommu_domain *immdom)
 	struct hv_input_delete_device_domain *input;
 	struct hv_input_device_domain *ddp;
 	struct hv_domain *hvdom = to_hv_domain(immdom);
+	struct hv_input_delete_device_domain test_input;
 
 	if (hv_special_domain(hvdom))
 		return;
@@ -221,14 +239,25 @@ static void hv_iommu_domain_free(struct iommu_domain *immdom)
 	/* Cleanup any remaining. 0 for size results in ULONG_MAX as the last */
 	hv_iommu_del_tree_mappings(hvdom, 0, 0);
 
-	local_irq_save(flags);
-	input = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	if (hv_iommu_kvm_test_mode())
+		input = &test_input;
+	else {
+		local_irq_save(flags);
+		input = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	}
 	ddp = &input->device_domain;
 	memset(input, 0, sizeof(*input));
 
 	ddp->partition_id = HV_PARTITION_ID_SELF;
 	ddp->domain_id.type = HV_DEVICE_DOMAIN_TYPE_S2;
 	ddp->domain_id.id = hvdom->domid_num;
+
+	if (hv_iommu_kvm_test_mode()) {
+		pr_info("Hyper-V: KVM test: delete domain %u\n",
+			ddp->domain_id.id);
+		kfree(hvdom);
+		return;
+	}
 
 	status = hv_do_hypercall(HVCALL_DELETE_DEVICE_DOMAIN, input,
 				 NULL);
@@ -248,10 +277,15 @@ static int hv_iommu_att_dev2dom(struct hv_domain *hvdom, struct pci_dev *pdev)
 {
 	unsigned long flags;
 	u64 status;
+	struct hv_input_attach_device_domain test_input;
 	struct hv_input_attach_device_domain *input;
 
-	local_irq_save(flags);
-	input = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	if (hv_iommu_kvm_test_mode())
+		input = &test_input;
+	else {
+		local_irq_save(flags);
+		input = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	}
 	memset(input, 0, sizeof(*input));
 
 	/* For null domain, hvdom->domid_num == HV_DEVICE_DOMAIN_ID_S2_NULL */
@@ -260,6 +294,13 @@ static int hv_iommu_att_dev2dom(struct hv_domain *hvdom, struct pci_dev *pdev)
 	input->device_domain.domain_id.id = hvdom->domid_num;
 
 	input->device_id.as_uint64 = hv_build_devid_type_pci(pdev);
+
+	if (hv_iommu_kvm_test_mode()) {
+		pr_info("Hyper-V: KVM test: attach device 0x%llx to domain %u\n",
+			input->device_id.as_uint64,
+			input->device_domain.domain_id.id);
+		return 0;
+	}
 
 	status = hv_do_hypercall(HVCALL_ATTACH_DEVICE_DOMAIN, input, NULL);
 	local_irq_restore(flags);
@@ -297,6 +338,7 @@ static int hv_iommu_external_attach_device(struct pci_dev *pdev, u64 partid,
 					   unsigned long vdev_id)
 {
 	struct hv_input_attach_device *input;
+	struct hv_input_attach_device test_input;
 	union hv_device_id host_devid;
 	unsigned long flags;
 	u64 status;
@@ -308,14 +350,25 @@ static int hv_iommu_external_attach_device(struct pci_dev *pdev, u64 partid,
 	host_devid.as_uint64 = hv_iommu_host_device_id(pdev);
 
 	do {
-		local_irq_save(flags);
-		input = *this_cpu_ptr(hyperv_pcpu_input_arg);
+		if (hv_iommu_kvm_test_mode())
+			input = &test_input;
+		else {
+			local_irq_save(flags);
+			input = *this_cpu_ptr(hyperv_pcpu_input_arg);
+		}
 		memset(input, 0, sizeof(*input));
 
 		input->partition_id = partid;
 		input->device_id = host_devid;
 		input->attdev_flags.logical_id = 1;
 		input->logical_devid = vdev_id;
+
+		if (hv_iommu_kvm_test_mode()) {
+			pr_info("Hyper-V: KVM test: external attach partition 0x%llx device 0x%llx vDEVICE 0x%lx\n",
+				input->partition_id, input->device_id.as_uint64,
+				vdev_id);
+			return 0;
+		}
 
 		status = hv_do_hypercall(HVCALL_ATTACH_DEVICE, input, NULL);
 		local_irq_restore(flags);
@@ -363,17 +416,29 @@ static int hv_iommu_external_attach_dev(struct iommu_domain *immdom,
 static u64 hv_iommu_unmap_batch(u32 domid_num, ulong iova, u16 count)
 {
 	ulong flags;
+	struct hv_input_unmap_device_gpa_pages test_input;
 	struct hv_input_unmap_device_gpa_pages *input;
 	u64 status;
 
-	local_irq_save(flags);
-	input = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	if (hv_iommu_kvm_test_mode())
+		input = &test_input;
+	else {
+		local_irq_save(flags);
+		input = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	}
 	memset(input, 0, sizeof(*input));
 
 	input->device_domain.partition_id = HV_PARTITION_ID_SELF;
 	input->device_domain.domain_id.type = HV_DEVICE_DOMAIN_TYPE_S2;
 	input->device_domain.domain_id.id = domid_num;
 	input->target_device_va_base = iova;
+
+	if (hv_iommu_kvm_test_mode()) {
+		pr_info("Hyper-V: KVM test: unmap %u pages at 0x%lx from domain %u\n",
+			count, iova, domid_num);
+		return ((u64)count << HV_HYPERCALL_REP_COMP_OFFSET) |
+		       HV_STATUS_SUCCESS;
+	}
 
 	status = hv_do_rep_hypercall(HVCALL_UNMAP_DEVICE_GPA_PAGES, count,
 				     0, input, NULL);
@@ -426,10 +491,18 @@ static u64 hv_iommu_map_pgs(struct hv_domain *hvdom,
 	u64 status;
 	int i;
 	struct hv_input_map_device_gpa_pages *input;
+	struct hv_input_map_device_gpa_pages *test_input = NULL;
 	unsigned long flags, pfn;
 
-	local_irq_save(flags);
-	input = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	if (hv_iommu_kvm_test_mode()) {
+		test_input = kzalloc_obj(*test_input, GFP_ATOMIC);
+		if (!test_input)
+			return HV_STATUS_INSUFFICIENT_MEMORY;
+		input = test_input;
+	} else {
+		local_irq_save(flags);
+		input = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	}
 	memset(input, 0, sizeof(*input));
 
 	input->device_domain.partition_id = HV_PARTITION_ID_SELF;
@@ -441,6 +514,14 @@ static u64 hv_iommu_map_pgs(struct hv_domain *hvdom,
 	pfn = paddr >> HV_HYP_PAGE_SHIFT;
 	for (i = 0; i < npages; i++, pfn++)
 		input->gpa_page_list[i] = pfn;
+
+	if (hv_iommu_kvm_test_mode()) {
+		pr_info("Hyper-V: KVM test: map %lu pages at 0x%lx to domain %u\n",
+			npages, iova, hvdom->domid_num);
+		kfree(test_input);
+		return ((u64)npages << HV_HYPERCALL_REP_COMP_OFFSET) |
+		       HV_STATUS_SUCCESS;
+	}
 
 	status = hv_do_rep_hypercall(HVCALL_MAP_DEVICE_GPA_PAGES, npages, 0,
 				     input, NULL);
@@ -654,6 +735,13 @@ static int hv_iommu_get_caps(struct hv_output_get_iommu_capabilities *caps)
 	struct hv_input_get_iommu_capabilities *input;
 	struct hv_output_get_iommu_capabilities *output;
 
+	if (hv_iommu_kvm_test_mode()) {
+		memset(caps, 0, sizeof(*caps));
+		caps->max_iova_width = 48;
+		caps->pgsize_bitmap = HV_IOMMU_PGSIZES;
+		return 0;
+	}
+
 	local_irq_save(flags);
 
 	input = *this_cpu_ptr(hyperv_pcpu_input_arg);
@@ -677,7 +765,7 @@ static int __init hv_iommu_init(void)
 	struct iommu_device *iommup = &hv_virt_iommu;
 	struct hv_output_get_iommu_capabilities caps;
 
-	if (!hv_is_hyperv_initialized())
+	if (!hv_iommu_kvm_test_mode() && !hv_is_hyperv_initialized())
 		return -ENODEV;
 
 	rc = hv_iommu_get_caps(&caps);
@@ -717,7 +805,8 @@ void __init hv_iommu_detect(void)
 	if (no_iommu || iommu_detected || hv_l1vh_partition())
 		return;
 
-	if (!(ms_hyperv.misc_features & HV_DEVICE_DOMAIN_AVAILABLE))
+	if (!hv_iommu_kvm_test_mode() &&
+	    !(ms_hyperv.misc_features & HV_DEVICE_DOMAIN_AVAILABLE))
 		return;
 
 	iommu_detected = 1;
