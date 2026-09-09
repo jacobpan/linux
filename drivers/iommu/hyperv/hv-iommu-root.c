@@ -99,32 +99,6 @@ static size_t hv_iommu_unmap_pages(struct iommu_domain *immdom, ulong iova,
 				   size_t pgsize, size_t pgcount,
 				   struct iommu_iotlb_gather *gather);
 
-/*
- * If the current thread is a VMM thread, return the partition id of the VM it
- * is managing, else return HV_PARTITION_ID_INVALID.
- */
-u64 hv_get_current_partid(void)
-{
-	u64 (*fn)(void);
-	u64 ptid;
-
-	fn = symbol_get(mshv_current_partid);
-	if (!fn)
-		return HV_PARTITION_ID_INVALID;
-
-	ptid = fn();
-	symbol_put(mshv_current_partid);
-
-	return ptid;
-}
-EXPORT_SYMBOL_GPL(hv_get_current_partid);
-
-/* If this is a VMM thread, then this domain is for a guest vm */
-static bool hv_curr_thread_is_vmm(void)
-{
-	return hv_get_current_partid() != HV_PARTITION_ID_INVALID;
-}
-
 static bool hv_iommu_capable(struct device *dev, enum iommu_cap cap)
 {
 	switch (cap) {
@@ -235,8 +209,8 @@ static struct iommu_domain *hv_iommu_domain_alloc_paging(struct device *dev)
 	struct hv_domain *hvdom;
 	int rc;
 
-	if (hv_l1vh_partition() && !hv_curr_thread_is_vmm()) {
-		pr_err("Hyper-V: l1vh iommu does not support host devices\n");
+	if (hv_l1vh_partition()) {
+		pr_err("Hyper-V: l1vh iommu does not support paging domains\n");
 		return NULL;
 	}
 

@@ -328,7 +328,6 @@ static inline u64 hv_pci_vmbus_device_id(struct pci_dev *pdev)
 #endif /* IS_ENABLED(CONFIG_PCI_HYPERV) */
 
 #if IS_ENABLED(CONFIG_HYPERV_IOMMU)
-u64 hv_get_current_partid(void);
 bool hv_pcidev_is_attached_dev(struct pci_dev *pdev);
 bool hv_pcidev_is_pthru_dev(struct pci_dev *pdev);
 u64 hv_build_devid_oftype(struct pci_dev *pdev, enum hv_device_type type);
@@ -340,8 +339,6 @@ static inline bool hv_pcidev_is_pthru_dev(struct pci_dev *pdev)
 static inline u64 hv_build_devid_oftype(struct pci_dev *pdev,
 					enum hv_device_type type)
 { return 0; }
-static inline u64 hv_get_current_partid(void)
-{ return HV_PARTITION_ID_INVALID; }
 #endif /* IS_ENABLED(CONFIG_HYPERV_IOMMU) */
 
 #else /* CONFIG_HYPERV */
@@ -378,7 +375,6 @@ int hv_call_add_logical_proc(int node, u32 lp_index, u32 acpi_id);
 int hv_call_notify_all_processors_started(void);
 bool hv_lp_exists(u32 lp_index);
 int hv_call_create_vp(int node, u64 partition_id, u32 vp_index, u32 flags);
-u64 mshv_current_partid(void);
 
 #else /* CONFIG_MSHV_ROOT */
 static inline bool hv_root_partition(void) { return false; }
@@ -408,10 +404,6 @@ static inline bool hv_lp_exists(u32 lp_index)
 static inline int hv_call_create_vp(int node, u64 partition_id, u32 vp_index, u32 flags)
 {
 	return -EOPNOTSUPP;
-}
-static inline u64 mshv_current_partid(void)
-{
-	return HV_PARTITION_ID_INVALID;
 }
 #endif /* CONFIG_MSHV_ROOT */
 
