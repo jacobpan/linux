@@ -405,6 +405,7 @@ struct file;
 struct mshv_partition_file_ops {
 	bool (*file_is_partition)(struct file *file);
 	u64 (*get_partid)(struct file *file);
+	int (*prepare_attach)(struct file *file);
 };
 
 #if IS_ENABLED(CONFIG_HYPERV)
@@ -413,6 +414,7 @@ void
 mshv_partition_file_ops_unregister(const struct mshv_partition_file_ops *ops);
 bool file_is_mshv_partition(struct file *file);
 u64 mshv_partition_file_get_partid(struct file *file);
+int mshv_partition_file_prepare_attach(struct file *file);
 #else
 static inline int
 mshv_partition_file_ops_register(const struct mshv_partition_file_ops *ops)
@@ -433,6 +435,11 @@ static inline bool file_is_mshv_partition(struct file *file)
 static inline u64 mshv_partition_file_get_partid(struct file *file)
 {
 	return HV_PARTITION_ID_INVALID;
+}
+
+static inline int mshv_partition_file_prepare_attach(struct file *file)
+{
+	return -EOPNOTSUPP;
 }
 #endif
 

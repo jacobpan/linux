@@ -46,7 +46,8 @@ int mshv_partition_file_ops_register(const struct mshv_partition_file_ops *ops)
 {
 	int ret = 0;
 
-	if (!ops || !ops->file_is_partition || !ops->get_partid)
+	if (!ops || !ops->file_is_partition || !ops->get_partid ||
+	    !ops->prepare_attach)
 		return -EINVAL;
 
 	mutex_lock(&mshv_partition_file_ops_lock);
@@ -105,6 +106,27 @@ u64 mshv_partition_file_get_partid(struct file *file)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(mshv_partition_file_get_partid);
+
+int mshv_partition_file_prepare_attach(struct file *file)
+{
+	const struct mshv_partition_file_ops *ops;
+	int ret = -EOPNOTSUPP;
+
+	if (!file)
+		return -EINVAL;
+
+	mutex_lock(&mshv_partition_file_ops_lock);
+	ops = mshv_partition_file_ops;
+	if (ops && ops->file_is_partition(file))
+		ret = 0;
+	mutex_unlock(&mshv_partition_file_ops_lock);
+
+	if (!ret)
+		ret = ops->prepare_attach(file);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(mshv_partition_file_prepare_attach);
 
 /*
  * ms_hyperv and hv_nested are defined here with other

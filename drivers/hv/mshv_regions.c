@@ -324,6 +324,12 @@ release_pages:
 	return ret < 0 ? ret : -ENOMEM;
 }
 
+int mshv_region_make_pinned(struct mshv_mem_region *region)
+{
+	/* Guest-memory pin conversion is not implemented in this RFC. */
+	return 0;
+}
+
 static int mshv_region_chunk_unmap(struct mshv_mem_region *region,
 				   u32 flags,
 				   u64 page_offset, u64 page_count,
