@@ -2182,9 +2182,44 @@ static u64 mshv_partition_file_get_partid_impl(struct file *file)
 	return HV_PARTITION_ID_INVALID;
 }
 
+static int mshv_partition_file_prepare_attach_impl(struct file *file)
+{
+	struct mshv_mem_region *region;
+	struct mshv_partition *partition;
+	int ret = 0;
+
+#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
+	if (file->f_op == &mshv_fake_partition_fops)
+		return 0;
+#endif
+	if (file->f_op != &mshv_partition_fops)
+		return -EINVAL;
+
+	partition = file->private_data;
+	if (!partition)
+		return -EINVAL;
+
+	mutex_lock(&partition->pt_mutex);
+	if (partition->pt_regions_pinned)
+		goto out_unlock;
+
+	hlist_for_each_entry(region, &partition->pt_mem_regions, hnode) {
+		ret = mshv_region_make_pinned(region);
+		if (ret)
+			goto out_unlock;
+	}
+
+	partition->pt_regions_pinned = true;
+
+out_unlock:
+	mutex_unlock(&partition->pt_mutex);
+	return ret;
+}
+
 static const struct mshv_partition_file_ops mshv_partition_file_ops = {
 	.file_is_partition = mshv_partition_file_is_valid,
 	.get_partid = mshv_partition_file_get_partid_impl,
+	.prepare_attach = mshv_partition_file_prepare_attach_impl,
 };
 
 static int
