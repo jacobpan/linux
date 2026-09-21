@@ -8,6 +8,7 @@
 #include <linux/gfp.h>
 #include <linux/pci.h>
 #include <linux/amd-iommu.h>
+#include <linux/hyperv.h>
 
 #include <asm/proto.h>
 #include <asm/dma.h>
@@ -101,6 +102,7 @@ void __init pci_iommu_alloc(void)
 	}
 	pci_swiotlb_detect();
 	gart_iommu_hole_init();
+	hv_iommu_detect();
 	amd_iommu_detect();
 	detect_intel_iommu();
 	swiotlb_init(x86_swiotlb_enable, x86_swiotlb_flags);
