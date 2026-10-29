@@ -4,6 +4,7 @@
 #include <linux/completion.h>
 #include <linux/mutex.h>
 #include <linux/pci.h>
+#include <uapi/linux/iommufd.h>
 
 struct iommufd_viommu_ops;
 struct module;
@@ -11,8 +12,17 @@ struct pci_tsm;
 struct pci_tsm_context;
 struct tsm_dev;
 
+struct pci_tsm_assignment_ops {
+	bool (*match)(struct pci_dev *pdev);
+	struct pci_tsm *(*probe)(struct tsm_dev *tsm_dev,
+				 struct pci_dev *pdev);
+	void (*remove)(struct pci_tsm *tsm);
+};
+
 /*
  * struct pci_tsm_ops - manage confidential links and security state
+ * @assignment_ops: Associate PCI functions with a TSM-owned vIOMMU without
+ *		    implying link security or device security state
  * @link_ops: Coordinate PCIe SPDM and IDE establishment via a platform TSM.
  *	      Provide a secure session transport for TDISP state management
  *	      (typically bare metal physical function operations).
@@ -27,9 +37,9 @@ struct tsm_dev;
  * and releases it after vIOMMU destruction. A backend providing this callback
  * must not unregister its TSM while the module is pinned.
  *
- * This operations are mutually exclusive either a tsm_dev instance
- * manages physical link properties or it manages function security
- * states like TDISP lock/unlock.
+ * These operations are mutually exclusive. A tsm_dev instance manages
+ * assignment, physical link properties, or function security states like
+ * TDISP lock/unlock.
  *
  * @viommu_get_ops runs with the backend module pinned. The PCI/TSM
  * association is checked during acquisition under pci_tsm_rwsem.
@@ -38,6 +48,7 @@ struct pci_tsm_ops {
 	struct module *owner;
 	const struct iommufd_viommu_ops *(*viommu_get_ops)(
 		struct device *dev, enum iommu_viommu_type type);
+	struct pci_tsm_assignment_ops assignment_ops;
 
 	/*
 	 * struct pci_tsm_link_ops - Manage physical link and the TSM/DSM session
@@ -157,6 +168,9 @@ static inline bool is_pci_tsm_pf0(struct pci_dev *pdev)
 #ifdef CONFIG_PCI_TSM
 int pci_tsm_register(struct tsm_dev *tsm_dev);
 void pci_tsm_unregister(struct tsm_dev *tsm_dev);
+int pci_tsm_assignment_constructor(struct pci_dev *pdev,
+				   struct pci_tsm *tsm,
+				   struct tsm_dev *tsm_dev);
 int pci_tsm_link_constructor(struct pci_dev *pdev, struct pci_tsm *tsm,
 			     struct tsm_dev *tsm_dev);
 int pci_tsm_pf0_constructor(struct pci_dev *pdev, struct pci_tsm_pf0 *tsm,
@@ -180,6 +194,13 @@ static inline int pci_tsm_register(struct tsm_dev *tsm_dev)
 }
 static inline void pci_tsm_unregister(struct tsm_dev *tsm_dev)
 {
+}
+
+static inline int pci_tsm_assignment_constructor(struct pci_dev *pdev,
+						 struct pci_tsm *tsm,
+						 struct tsm_dev *tsm_dev)
+{
+	return -EOPNOTSUPP;
 }
 
 static inline bool pci_tsm_is_configured(struct pci_dev *pdev)

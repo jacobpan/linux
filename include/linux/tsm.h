@@ -116,6 +116,7 @@ struct tsm_dev {
 	struct device dev;
 	int id;
 	const struct pci_tsm_ops *pci_ops;
+	struct list_head pci_entry;
 };
 
 DEFINE_FREE(put_tsm_dev, struct tsm_dev *,

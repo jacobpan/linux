@@ -35,11 +35,15 @@ static DECLARE_RWSEM(pci_tsm_rwsem);
  */
 static int pci_tsm_link_count;
 static int pci_tsm_devsec_count;
+static LIST_HEAD(pci_tsm_assignment_list);
 
 static const struct pci_tsm_ops *to_pci_tsm_ops(struct pci_tsm *tsm)
 {
 	return tsm->tsm_dev->pci_ops;
 }
+
+static bool is_link_tsm(struct tsm_dev *tsm_dev);
+static bool is_assignment_tsm(struct tsm_dev *tsm_dev);
 
 struct tsm_dev *pci_tsm_get_device(struct pci_dev *pdev)
 {
@@ -62,7 +66,8 @@ EXPORT_SYMBOL_GPL(pci_tsm_get_device);
 
 static inline bool is_dsm(struct pci_dev *pdev)
 {
-	return pdev->tsm && pdev->tsm->dsm_dev == pdev;
+	return pdev->tsm && is_link_tsm(pdev->tsm->tsm_dev) &&
+	       pdev->tsm->dsm_dev == pdev;
 }
 
 static inline bool has_tee(struct pci_dev *pdev)
@@ -96,7 +101,10 @@ static void tsm_remove(struct pci_tsm *tsm)
 		return;
 
 	pdev = tsm->pdev;
-	to_pci_tsm_ops(tsm)->remove(tsm);
+	if (is_assignment_tsm(tsm->tsm_dev))
+		tsm->tsm_dev->pci_ops->assignment_ops.remove(tsm);
+	else
+		to_pci_tsm_ops(tsm)->remove(tsm);
 	pdev->tsm = NULL;
 }
 DEFINE_FREE(tsm_remove, struct pci_tsm *, if (_T) tsm_remove(_T))
@@ -282,6 +290,17 @@ static bool is_devsec_tsm(struct tsm_dev *tsm_dev)
 	return tsm_dev && tsm_dev->pci_ops && tsm_dev->pci_ops->devsec_ops.lock;
 }
 
+static bool is_assignment_tsm(struct tsm_dev *tsm_dev)
+{
+	const struct pci_tsm_assignment_ops *ops;
+
+	if (!tsm_dev || !tsm_dev->pci_ops)
+		return false;
+
+	ops = &tsm_dev->pci_ops->assignment_ops;
+	return ops->match && ops->probe && ops->remove;
+}
+
 static ssize_t connect_store(struct device *dev, struct device_attribute *attr,
 			     const char *buf, size_t len)
 {
@@ -464,7 +483,9 @@ static ssize_t disconnect_store(struct device *dev,
 	tsm_dev = pdev->tsm->tsm_dev;
 	if (!sysfs_streq(buf, dev_name(&tsm_dev->dev)))
 		return -EINVAL;
-	if (is_link_tsm(tsm_dev) && is_pci_tsm_pf0(pdev) &&
+	if (!is_link_tsm(tsm_dev))
+		return -EOPNOTSUPP;
+	if (is_pci_tsm_pf0(pdev) &&
 	    to_pci_tsm_pf0(pdev->tsm)->removing)
 		return -ENODEV;
 
@@ -698,18 +719,44 @@ void pci_tsm_pf0_destructor(struct pci_tsm_pf0 *pf0_tsm)
 }
 EXPORT_SYMBOL_GPL(pci_tsm_pf0_destructor);
 
+int pci_tsm_assignment_constructor(struct pci_dev *pdev,
+				   struct pci_tsm *tsm,
+				   struct tsm_dev *tsm_dev)
+{
+	if (!pdev || !tsm || !is_assignment_tsm(tsm_dev))
+		return -EINVAL;
+
+	tsm->pdev = pdev;
+	tsm->dsm_dev = pdev;
+	tsm->tsm_dev = tsm_dev;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(pci_tsm_assignment_constructor);
+
+bool pci_tsm_assignment_probe(struct pci_dev *pdev,
+			      struct tsm_dev *tsm_dev)
+{
+	const struct pci_tsm_assignment_ops *ops =
+		&tsm_dev->pci_ops->assignment_ops;
+
+	if (pdev->tsm || !ops->match(pdev))
+		return false;
+
+	pdev->tsm = ops->probe(tsm_dev, pdev);
+	return !!pdev->tsm;
+}
+
 int pci_tsm_register(struct tsm_dev *tsm_dev)
 {
 	struct pci_dev *pdev = NULL;
+	unsigned int roles;
 
 	if (!tsm_dev)
 		return -EINVAL;
 
-	/* The TSM device must only implement one of link_ops or devsec_ops */
-	if (!is_link_tsm(tsm_dev) && !is_devsec_tsm(tsm_dev))
-		return -EINVAL;
-
-	if (is_link_tsm(tsm_dev) && is_devsec_tsm(tsm_dev))
+	roles = is_link_tsm(tsm_dev) + is_devsec_tsm(tsm_dev) +
+		is_assignment_tsm(tsm_dev);
+	if (roles != 1)
 		return -EINVAL;
 
 	guard(rwsem_write)(&pci_tsm_rwsem);
@@ -721,6 +768,11 @@ int pci_tsm_register(struct tsm_dev *tsm_dev)
 				link_sysfs_enable(pdev);
 	} else if (is_devsec_tsm(tsm_dev)) {
 		pci_tsm_devsec_count++;
+	} else {
+		list_add_tail(&tsm_dev->pci_entry,
+			      &pci_tsm_assignment_list);
+		for_each_pci_dev(pdev)
+			pci_tsm_assignment_probe(pdev, tsm_dev);
 	}
 
 	return 0;
@@ -811,6 +863,8 @@ void pci_tsm_destroy(struct pci_dev *pdev)
 
 void pci_tsm_init(struct pci_dev *pdev)
 {
+	struct tsm_dev *tsm_dev;
+
 	guard(rwsem_read)(&pci_tsm_rwsem);
 
 	/*
@@ -820,6 +874,11 @@ void pci_tsm_init(struct pci_dev *pdev)
 	 */
 	if (pdev->tsm)
 		return;
+
+	list_for_each_entry(tsm_dev, &pci_tsm_assignment_list, pci_entry) {
+		if (pci_tsm_assignment_probe(pdev, tsm_dev))
+			return;
+	}
 
 	if (pci_tsm_link_count) {
 		struct pci_dev *dsm = find_dsm_dev(pdev);
@@ -850,6 +909,8 @@ void pci_tsm_unregister(struct tsm_dev *tsm_dev)
 		pci_tsm_link_count--;
 	if (is_devsec_tsm(tsm_dev))
 		pci_tsm_devsec_count--;
+	if (is_assignment_tsm(tsm_dev))
+		list_del_init(&tsm_dev->pci_entry);
 	for_each_pci_dev_reverse(pdev)
 		__pci_tsm_destroy(pdev, tsm_dev);
 }
@@ -859,7 +920,8 @@ int pci_tsm_doe_transfer(struct pci_dev *pdev, u8 type, const void *req,
 {
 	struct pci_tsm_pf0 *tsm;
 
-	if (!pdev->tsm || !is_pci_tsm_pf0(pdev))
+	if (!pdev->tsm || !is_link_tsm(pdev->tsm->tsm_dev) ||
+	    !is_pci_tsm_pf0(pdev))
 		return -ENXIO;
 
 	tsm = to_pci_tsm_pf0(pdev->tsm);

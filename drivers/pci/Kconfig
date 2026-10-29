@@ -139,6 +139,18 @@ config PCI_TSM
 
 	  Enable a platform TSM driver to use this capability.
 
+config PCI_TSM_KUNIT_TEST
+	bool "KUnit tests for PCI TSM" if !KUNIT_ALL_TESTS
+	depends on KUNIT=y
+	depends on PCI_TSM
+	default KUNIT_ALL_TESTS
+	help
+	  Enable unit tests for PCI TSM provider association. The tests cover
+	  matching devices, ignoring nonmatching devices, and preserving an
+	  existing association when another assignment provider also matches.
+
+	  If unsure, say N.
+
 config PCI_DOE
 	bool "Enable PCI Data Object Exchange (DOE) support"
 	help

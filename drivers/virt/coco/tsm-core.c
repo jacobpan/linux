@@ -81,6 +81,7 @@ static struct tsm_dev *alloc_tsm_dev(struct device *parent)
 		return ERR_PTR(id);
 
 	tsm_dev->id = id;
+	INIT_LIST_HEAD(&tsm_dev->pci_entry);
 	dev = &tsm_dev->dev;
 	dev->parent = parent;
 	dev->class = &tsm_class;

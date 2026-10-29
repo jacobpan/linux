@@ -9,6 +9,7 @@
 #include <trace/events/pci.h>
 
 struct pcie_tlp_log;
+struct tsm_dev;
 
 /* Number of possible devfns: 0.0 to 1f.7 inclusive */
 #define MAX_NR_DEVFNS 256
@@ -760,6 +761,8 @@ static inline void pci_ide_destroy(struct pci_dev *dev) { }
 #ifdef CONFIG_PCI_TSM
 void pci_tsm_init(struct pci_dev *pdev);
 void pci_tsm_destroy(struct pci_dev *pdev);
+bool pci_tsm_assignment_probe(struct pci_dev *pdev,
+			      struct tsm_dev *tsm_dev);
 extern const struct attribute_group pci_tsm_attr_group;
 extern const struct attribute_group pci_tsm_auth_attr_group;
 #else
