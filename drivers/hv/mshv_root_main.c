@@ -2783,6 +2783,14 @@ static int __init mshv_fake_parent_partition_init(void)
 		return ret;
 	}
 
+	ret = mshv_tsm_init(mshv_dev.this_device);
+	if (ret) {
+		misc_deregister(&mshv_dev);
+		mshv_partition_file_ops_unregister(&mshv_partition_file_ops);
+		mshv_fake_mode = false;
+		return ret;
+	}
+
 	dev_warn(mshv_dev.this_device,
 		 "registered fake VM FD prototype mode; Hyper-V calls disabled\n");
 	return 0;
@@ -2819,6 +2827,10 @@ static int __init mshv_parent_partition_init(void)
 
 	dev = mshv_dev.this_device;
 
+	ret = mshv_tsm_init(dev);
+	if (ret)
+		goto device_deregister;
+
 	if (version_info.build_number < MSHV_HV_MIN_VERSION ||
 	    version_info.build_number > MSHV_HV_MAX_VERSION) {
 		dev_err(dev, "Running on unvalidated Hyper-V version\n");
@@ -2829,7 +2841,7 @@ static int __init mshv_parent_partition_init(void)
 
 	ret = mshv_synic_init(dev);
 	if (ret)
-		goto device_deregister;
+		goto tsm_exit;
 
 	ret = mshv_init_vmm_caps(dev);
 	if (ret)
@@ -2864,6 +2876,8 @@ deinit_root_scheduler:
 	root_scheduler_deinit();
 synic_cleanup:
 	mshv_synic_exit();
+tsm_exit:
+	mshv_tsm_exit();
 device_deregister:
 	misc_deregister(&mshv_dev);
 unregister_file_ops:
@@ -2875,6 +2889,7 @@ static void __exit mshv_parent_partition_exit(void)
 {
 #if IS_ENABLED(CONFIG_IOMMUFD_TEST)
 	if (mshv_fake_mode) {
+		mshv_tsm_exit();
 		misc_deregister(&mshv_dev);
 		mshv_partition_file_ops_unregister(&mshv_partition_file_ops);
 		return;
@@ -2884,6 +2899,7 @@ static void __exit mshv_parent_partition_exit(void)
 	hv_setup_mshv_handler(NULL);
 	mshv_port_table_fini();
 	mshv_debugfs_exit();
+	mshv_tsm_exit();
 	misc_deregister(&mshv_dev);
 	mshv_partition_file_ops_unregister(&mshv_partition_file_ops);
 	mshv_irqfd_wq_cleanup();

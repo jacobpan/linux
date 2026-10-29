@@ -5,6 +5,7 @@
  */
 #include <linux/pci.h>
 #include <linux/dma-map-ops.h>
+#include <linux/hyperv-iommu.h>
 #include <linux/interval_tree.h>
 #include <linux/hyperv.h>
 #include <linux/iommufd.h>
@@ -629,10 +630,10 @@ static phys_addr_t hv_iommu_iova_to_phys(struct iommu_domain *immdom,
  * dynamically. So use this to allow users to manually specify devices that
  * should be skipped. (eg. hypervisor debugger using some network device).
  */
-static struct iommu_device *hv_iommu_probe_device(struct device *dev)
+bool hv_iommu_root_managed(struct device *dev)
 {
 	if (!dev_is_pci(dev))
-		return ERR_PTR(-ENODEV);
+		return false;
 
 	if (hv_skip_pci_devs && *hv_skip_pci_devs) {
 		int rc, parsed, segment, bus, slot, func;
@@ -651,14 +652,23 @@ static struct iommu_device *hv_iommu_probe_device(struct device *dev)
 			if (pci_domain_nr(pdev->bus) == segment &&
 			    pdev->bus->number == bus &&
 			    PCI_SLOT(pdev->devfn) == slot &&
-			    PCI_FUNC(pdev->devfn) == func) {
-
-				dev_info(dev, "skipped by Hyper-V IOMMU\n");
-				return ERR_PTR(-ENODEV);
-			}
+			    PCI_FUNC(pdev->devfn) == func)
+				return false;
 			pos += parsed;
 
 		} while (hv_skip_pci_devs[pos]);
+	}
+
+	return true;
+}
+EXPORT_SYMBOL_GPL(hv_iommu_root_managed);
+
+static struct iommu_device *hv_iommu_probe_device(struct device *dev)
+{
+	if (!hv_iommu_root_managed(dev)) {
+		if (dev_is_pci(dev))
+			dev_info(dev, "skipped by Hyper-V IOMMU\n");
+		return ERR_PTR(-ENODEV);
 	}
 
 	return &hv_virt_iommu;

@@ -273,6 +273,19 @@ void mshv_isr(void);
 int mshv_synic_init(struct device *dev);
 void mshv_synic_exit(void);
 
+#if IS_ENABLED(CONFIG_HYPERV_ROOT_IOMMU)
+int mshv_tsm_init(struct device *parent);
+void mshv_tsm_exit(void);
+#else
+static inline int mshv_tsm_init(struct device *parent)
+{
+	return 0;
+}
+static inline void mshv_tsm_exit(void)
+{
+}
+#endif
+
 static inline bool mshv_partition_encrypted(struct mshv_partition *partition)
 {
 	return partition->isolation_type == HV_PARTITION_ISOLATION_TYPE_SNP;
