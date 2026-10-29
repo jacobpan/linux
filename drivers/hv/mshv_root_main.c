@@ -2209,7 +2209,7 @@ static bool mshv_partition_file_is_valid(struct file *file)
 	return false;
 }
 
-static u64 mshv_partition_file_get_partid_impl(struct file *file)
+u64 mshv_partition_file_get_partid_internal(struct file *file)
 {
 	if (file->f_op == &mshv_partition_fops) {
 		struct mshv_partition *partition = file->private_data;
@@ -2228,7 +2228,7 @@ static u64 mshv_partition_file_get_partid_impl(struct file *file)
 	return HV_PARTITION_ID_INVALID;
 }
 
-static int mshv_partition_file_prepare_attach_impl(struct file *file)
+int mshv_partition_file_prepare_attach_internal(struct file *file)
 {
 	struct mshv_mem_region *region;
 	struct mshv_partition *partition;
@@ -2264,8 +2264,8 @@ out_unlock:
 
 static const struct mshv_partition_file_ops mshv_partition_file_ops = {
 	.file_is_partition = mshv_partition_file_is_valid,
-	.get_partid = mshv_partition_file_get_partid_impl,
-	.prepare_attach = mshv_partition_file_prepare_attach_impl,
+	.get_partid = mshv_partition_file_get_partid_internal,
+	.prepare_attach = mshv_partition_file_prepare_attach_internal,
 };
 
 static int

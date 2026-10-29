@@ -286,6 +286,9 @@ static inline void mshv_tsm_exit(void)
 }
 #endif
 
+u64 mshv_partition_file_get_partid_internal(struct file *file);
+int mshv_partition_file_prepare_attach_internal(struct file *file);
+
 static inline bool mshv_partition_encrypted(struct mshv_partition *partition)
 {
 	return partition->isolation_type == HV_PARTITION_ISOLATION_TYPE_SNP;

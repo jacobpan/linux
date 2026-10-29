@@ -30,9 +30,4 @@ struct hv_domain {
 
 extern const struct iommu_domain_ops hv_iommu_external_domain_ops;
 
-const struct iommufd_viommu_ops *
-hv_iommufd_get_viommu_ops(struct device *dev,
-			  enum iommu_viommu_type viommu_type);
-int hv_iommufd_prepare_attach(struct iommufd_viommu *viommu);
-
 #endif /* __HYPERV_IOMMU_H */

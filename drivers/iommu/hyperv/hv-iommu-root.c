@@ -402,10 +402,6 @@ static int hv_iommu_external_attach_dev(struct iommu_domain *immdom,
 	if (rc)
 		return rc;
 
-	rc = hv_iommufd_prepare_attach(hvdom_new->viommu);
-	if (rc)
-		return rc;
-
 	/*
 	 * HVCALL_ATTACH_DEVICE atomically replaces any existing assignment,
 	 * leaving @old intact if the new attachment fails.
@@ -413,6 +409,43 @@ static int hv_iommu_external_attach_dev(struct iommu_domain *immdom,
 	return hv_iommu_external_attach_device(to_pci_dev(dev),
 					       hvdom_new->partid, vdev_id);
 }
+
+struct iommu_domain *
+hv_iommufd_alloc_domain_external(struct iommufd_viommu *viommu,
+				 u64 partition_id, u32 flags,
+				 const struct iommu_user_data *user_data)
+{
+	struct iommu_hwpt_external external = {};
+	struct hv_domain *hvdom;
+	int rc;
+
+	if (viommu->type != IOMMU_VIOMMU_TYPE_HYPERVISOR)
+		return ERR_PTR(-EOPNOTSUPP);
+	if (flags)
+		return ERR_PTR(-EOPNOTSUPP);
+	if (!user_data || user_data->type != IOMMU_HWPT_DATA_EXTERNAL)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	rc = iommu_copy_struct_from_user(&external, user_data,
+					 IOMMU_HWPT_DATA_EXTERNAL, flags);
+	if (rc)
+		return ERR_PTR(rc);
+	if (external.flags || external.__reserved)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	hvdom = kzalloc_obj(*hvdom, GFP_KERNEL_ACCOUNT);
+	if (!hvdom)
+		return ERR_PTR(-ENOMEM);
+
+	hvdom->iommu_dom.type = IOMMU_DOMAIN_EXTERNAL;
+	hvdom->iommu_dom.ops = &hv_iommu_external_domain_ops;
+	hvdom->iommu_dom.pgsize_bitmap = HV_IOMMU_PGSIZES;
+	hvdom->partid = partition_id;
+	hvdom->viommu = viommu;
+
+	return &hvdom->iommu_dom;
+}
+EXPORT_SYMBOL_GPL(hv_iommufd_alloc_domain_external);
 
 static u64 hv_iommu_unmap_batch(u32 domid_num, ulong iova, u16 count)
 {
@@ -710,7 +743,6 @@ const struct iommu_domain_ops hv_iommu_external_domain_ops = {
 static struct iommu_ops hv_iommu_ops = {
 	.capable	    = hv_iommu_capable,
 	.domain_alloc_paging	= hv_iommu_domain_alloc_paging,
-	.get_viommu_ops    = hv_iommufd_get_viommu_ops,
 	.probe_device	    = hv_iommu_probe_device,
 	.device_group	    = hv_iommu_device_group,
 	.get_resv_regions   = hv_iommu_get_resv_regions,
