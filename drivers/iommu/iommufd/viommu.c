@@ -53,6 +53,11 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 		tsm_dev = NULL;
 		goto out_put_idev;
 	}
+	iommu_dev = iommufd_device_get_iommu_dev(idev);
+	if (!iommu_dev) {
+		rc = -EOPNOTSUPP;
+		goto out_put_idev;
+	}
 	ops = tsm_dev ? tsm_viommu_get_ops(tsm_dev, idev->dev, cmd->type) : NULL;
 	if (IS_ERR(ops)) {
 		rc = PTR_ERR(ops);
@@ -62,11 +67,6 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 		if (tsm_dev) {
 			tsm_put_device(tsm_dev);
 			tsm_dev = NULL;
-		}
-		iommu_dev = iommufd_device_get_iommu_dev(idev);
-		if (!iommu_dev) {
-			rc = -EOPNOTSUPP;
-			goto out_put_idev;
 		}
 		if (!iommu_dev->ops->get_viommu_ops) {
 			rc = -EOPNOTSUPP;

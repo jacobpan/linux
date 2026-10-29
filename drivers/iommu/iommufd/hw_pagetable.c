@@ -374,6 +374,8 @@ iommufd_viommu_alloc_hwpt_external(struct iommufd_viommu *viommu, u32 flags,
 		return ERR_PTR(-EOPNOTSUPP);
 	if (!viommu->ops || !viommu->ops->alloc_domain_external)
 		return ERR_PTR(-EOPNOTSUPP);
+	if (WARN_ON_ONCE(!viommu->iommu_dev))
+		return ERR_PTR(-EOPNOTSUPP);
 
 	hwpt_external = __iommufd_object_alloc(viommu->ictx, hwpt_external,
 					       IOMMUFD_OBJ_HWPT_EXTERNAL,
