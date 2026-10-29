@@ -3019,6 +3019,11 @@ TEST_F(iommufd_viommu, viommu_alloc_with_data)
 TEST_F(iommufd_viommu, viommu_alloc_mshv)
 {
 	struct iommu_viommu_hypervisor data = {};
+	struct iommu_vdevice_tsm_req req = {
+		.size = sizeof(req),
+		.op = TSM_REQ_SET_TDI_STATE,
+		.tvm_arch = IOMMU_VDEVICE_TSM_TVM_ARCH_CCA,
+	};
 	struct mshv_create_partition args = {};
 	uint32_t viommu_id;
 	uint32_t vdev_id;
@@ -3027,6 +3032,15 @@ TEST_F(iommufd_viommu, viommu_alloc_mshv)
 
 	if (!self->device_id)
 		SKIP(return, "Skipping test for variant no_viommu");
+
+	vm_fd = dup(self->fd);
+	ASSERT_NE(-1, vm_fd);
+	close(vm_fd);
+	data.vm_fd = vm_fd;
+	EXPECT_ERRNO(EBADF,
+		     _test_cmd_viommu_alloc(self->fd, self->device_id, 0, 0,
+					    IOMMU_VIOMMU_TYPE_HYPERVISOR,
+					    &data, sizeof(data), &viommu_id));
 
 	mshv_fd = open("/dev/mshv", O_RDWR | O_CLOEXEC);
 	if (mshv_fd < 0) {
@@ -3044,6 +3058,9 @@ TEST_F(iommufd_viommu, viommu_alloc_mshv)
 					    sizeof(data), &viommu_id));
 
 	test_cmd_vdevice_alloc(viommu_id, self->device_id, 0x99, &vdev_id);
+	req.vdevice_id = vdev_id;
+	EXPECT_ERRNO(EOPNOTSUPP,
+		     ioctl(self->fd, IOMMU_VDEVICE_TSM_REQ, &req));
 	EXPECT_ERRNO(EBUSY, _test_ioctl_destroy(self->fd, viommu_id));
 	test_ioctl_destroy(vdev_id);
 	test_ioctl_destroy(viommu_id);
