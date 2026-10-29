@@ -122,9 +122,21 @@ static int mshv_tsm_vdevice_init(struct iommufd_vdevice *vdev)
 {
 	struct mshv_tsm_viommu *mshv_viommu =
 		to_mshv_tsm_viommu(vdev->viommu);
+	struct tsm_dev *tsm_dev;
+	int rc;
 
-	return mshv_partition_file_prepare_attach_internal(
-		mshv_viommu->vm_file);
+	tsm_dev = tsm_get_device(iommufd_vdevice_to_device(vdev));
+	if (IS_ERR(tsm_dev))
+		return PTR_ERR(tsm_dev);
+	if (tsm_dev != vdev->viommu->tsm_dev)
+		rc = -EXDEV;
+	else
+		rc = mshv_partition_file_prepare_attach_internal(
+			mshv_viommu->vm_file);
+	if (tsm_dev)
+		tsm_put_device(tsm_dev);
+
+	return rc;
 }
 
 static const struct iommufd_viommu_ops mshv_tsm_viommu_ops = {
