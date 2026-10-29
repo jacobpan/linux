@@ -19,7 +19,6 @@
 struct intel_iommu_viommu {
 	struct iommufd_viommu core;
 	struct file *vm_file;
-	u64 partid;
 };
 
 struct intel_iommu_external_domain {
@@ -178,27 +177,7 @@ static int intel_iommu_viommu_init(struct iommufd_viommu *viommu,
 	if (!intel_viommu->vm_file)
 		return -EBADF;
 
-	if (!file_is_mshv_partition(intel_viommu->vm_file)) {
-		ret = -EINVAL;
-		goto out_put_file;
-	}
-
-	intel_viommu->partid =
-		mshv_partition_file_get_partid(intel_viommu->vm_file);
-	if (intel_viommu->partid == HV_PARTITION_ID_INVALID) {
-		ret = -EINVAL;
-		goto out_put_file;
-	}
-
-	pr_info("hypervisor vIOMMU init: vm_fd=%u partid=0x%llx\n",
-		hypervisor.vm_fd, intel_viommu->partid);
-
 	return 0;
-
-out_put_file:
-	fput(intel_viommu->vm_file);
-	intel_viommu->vm_file = NULL;
-	return ret;
 }
 
 const struct iommufd_viommu_ops *

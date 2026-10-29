@@ -2193,22 +2193,6 @@ mshv_fake_partition_release(struct inode *inode, struct file *filp)
 }
 #endif
 
-static bool mshv_partition_file_is_valid(struct file *file)
-{
-	if (!file)
-		return false;
-
-	if (file->f_op == &mshv_partition_fops)
-		return true;
-
-#if IS_ENABLED(CONFIG_IOMMUFD_TEST)
-	if (file->f_op == &mshv_fake_partition_fops)
-		return true;
-#endif
-
-	return false;
-}
-
 u64 mshv_partition_file_get_partid_internal(struct file *file)
 {
 	if (file->f_op == &mshv_partition_fops) {
@@ -2261,12 +2245,6 @@ out_unlock:
 	mutex_unlock(&partition->pt_mutex);
 	return ret;
 }
-
-static const struct mshv_partition_file_ops mshv_partition_file_ops = {
-	.file_is_partition = mshv_partition_file_is_valid,
-	.get_partid = mshv_partition_file_get_partid_internal,
-	.prepare_attach = mshv_partition_file_prepare_attach_internal,
-};
 
 static int
 add_partition(struct mshv_partition *partition)
@@ -2770,15 +2748,8 @@ static int __init mshv_fake_parent_partition_init(void)
 
 	mshv_fake_mode = true;
 
-	ret = mshv_partition_file_ops_register(&mshv_partition_file_ops);
-	if (ret) {
-		mshv_fake_mode = false;
-		return ret;
-	}
-
 	ret = misc_register(&mshv_dev);
 	if (ret) {
-		mshv_partition_file_ops_unregister(&mshv_partition_file_ops);
 		mshv_fake_mode = false;
 		return ret;
 	}
@@ -2786,7 +2757,6 @@ static int __init mshv_fake_parent_partition_init(void)
 	ret = mshv_tsm_init(mshv_dev.this_device);
 	if (ret) {
 		misc_deregister(&mshv_dev);
-		mshv_partition_file_ops_unregister(&mshv_partition_file_ops);
 		mshv_fake_mode = false;
 		return ret;
 	}
@@ -2817,13 +2787,9 @@ static int __init mshv_parent_partition_init(void)
 	if (hv_get_hypervisor_version(&version_info))
 		return -ENODEV;
 
-	ret = mshv_partition_file_ops_register(&mshv_partition_file_ops);
-	if (ret)
-		return ret;
-
 	ret = misc_register(&mshv_dev);
 	if (ret)
-		goto unregister_file_ops;
+		return ret;
 
 	dev = mshv_dev.this_device;
 
@@ -2880,8 +2846,6 @@ tsm_exit:
 	mshv_tsm_exit();
 device_deregister:
 	misc_deregister(&mshv_dev);
-unregister_file_ops:
-	mshv_partition_file_ops_unregister(&mshv_partition_file_ops);
 	return ret;
 }
 
@@ -2891,7 +2855,6 @@ static void __exit mshv_parent_partition_exit(void)
 	if (mshv_fake_mode) {
 		mshv_tsm_exit();
 		misc_deregister(&mshv_dev);
-		mshv_partition_file_ops_unregister(&mshv_partition_file_ops);
 		return;
 	}
 #endif
@@ -2901,7 +2864,6 @@ static void __exit mshv_parent_partition_exit(void)
 	mshv_debugfs_exit();
 	mshv_tsm_exit();
 	misc_deregister(&mshv_dev);
-	mshv_partition_file_ops_unregister(&mshv_partition_file_ops);
 	mshv_irqfd_wq_cleanup();
 	root_scheduler_deinit();
 	mshv_synic_exit();
