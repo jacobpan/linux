@@ -526,6 +526,9 @@ static bool pci_tsm_link_group_visible(struct kobject *kobj)
 	if (!pci_is_pcie(pdev))
 		return false;
 
+	if (pdev->tsm && !is_link_tsm(pdev->tsm->tsm_dev))
+		return false;
+
 	if (is_pci_tsm_pf0(pdev))
 		return true;
 
@@ -743,6 +746,8 @@ bool pci_tsm_assignment_probe(struct pci_dev *pdev,
 		return false;
 
 	pdev->tsm = ops->probe(tsm_dev, pdev);
+	if (pdev->tsm && pci_tsm_link_count && is_pci_tsm_pf0(pdev))
+		link_sysfs_disable(pdev);
 	return !!pdev->tsm;
 }
 
@@ -790,6 +795,8 @@ int pci_tsm_register(struct tsm_dev *tsm_dev)
 static void __pci_tsm_destroy(struct pci_dev *pdev, struct tsm_dev *tsm_dev)
 {
 	struct pci_tsm *tsm = pdev->tsm;
+	bool assignment_unregister =
+		tsm_dev && is_assignment_tsm(tsm_dev);
 
 	lockdep_assert_held_write(&pci_tsm_rwsem);
 
@@ -816,6 +823,9 @@ static void __pci_tsm_destroy(struct pci_dev *pdev, struct tsm_dev *tsm_dev)
 			pci_warn(pdev, "TSM connection is still in use\n");
 	} else {
 		tsm_remove(pdev->tsm);
+		if (assignment_unregister && pci_tsm_link_count &&
+		    is_pci_tsm_pf0(pdev))
+			link_sysfs_enable(pdev);
 	}
 }
 
