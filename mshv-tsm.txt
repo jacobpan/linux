@@ -1,0 +1,253 @@
+MSHV as a TSM-backed IOMMUFD vIOMMU provider
+================================================
+
+Purpose
+-------
+
+Move ownership of the Hyper-V external-assignment vIOMMU from the physical
+Hyper-V root-IOMMU driver to MSHV.  This removes the MSHV partition-file
+callback bridge and establishes the ownership model needed for future
+Hyper-V-managed IDE and TDISP support.
+
+The work is split into two independently useful phases:
+
+1. Register MSHV as a TSM-backed external-assignment provider without
+   advertising TDISP support.
+2. Add Hyper-V-managed IDE, TDISP, and trusted-MMIO transitions.
+
+Phase 1 must not implement dummy TDISP operations or report a device as
+TDISP-locked.  Its TSM role is limited to deciding whether a PCI device can be
+assigned to an MSHV partition and supplying the corresponding IOMMUFD vIOMMU
+operations.
+
+
+Current problem
+---------------
+
+The current implementation splits one vIOMMU across two drivers:
+
+  MSHV:
+    - validates an MSHV partition file
+    - converts the file to a Hyper-V partition ID
+    - pins partition memory before device attachment
+
+  Hyper-V root IOMMU:
+    - provides the IOMMUFD vIOMMU operations
+    - allocates IOMMU_DOMAIN_EXTERNAL domains
+    - issues HVCALL_ATTACH_DEVICE
+
+The drivers communicate through mshv_partition_file_ops registered in
+hv_common.c.  This is an MSHV-specific callback bridge and places VM ownership
+outside the object that represents the VM in IOMMUFD.
+
+Aneesh's PCI/TSM integration gives TSM operations precedence over physical
+IOMMU operations:
+
+  IOMMU_VIOMMU_ALLOC
+    -> find the TSM associated with the PCI device
+    -> request the TSM vIOMMU operations
+    -> fall back to iommu_ops->get_viommu_ops() if there is no TSM provider
+
+MSHV can therefore own the complete Hyper-V vIOMMU when a device is associated
+with the MSHV TSM.
+
+
+Phase 1: external assignment
+----------------------------
+
+Provider registration
+~~~~~~~~~~~~~~~~~~~~~
+
+MSHV registers one TSM device when the MSHV root driver initializes.  The
+provider supplies:
+
+  - module ownership
+  - matching for devices managed by the Hyper-V root IOMMU
+  - PCI-device association and removal operations
+  - IOMMU_VIOMMU_TYPE_HYPERVISOR operations
+
+The existing PCI/TSM API requires link or device-security operations before a
+provider can be registered.  Phase 1 must extend PCI/TSM with an
+assignment-only provider role instead of supplying dummy link or TDISP
+callbacks.
+
+An assignment-only provider has these internal operations:
+
+  match(pdev)
+    Return true only when hv_iommu_root_managed(&pdev->dev) is true.
+
+  probe(tsm_dev, pdev)
+    Allocate a struct pci_tsm association between the PCI function and MSHV.
+    This association represents Hyper-V ownership of external-assignment
+    policy.  It does not imply an IDE connection or a TDISP state.
+
+  remove(pci_tsm)
+    Destroy the association after all dependent vIOMMU and vDEVICE objects
+    have been released.
+
+PCI/TSM registration scans existing PCI devices.  PCI device initialization
+applies the same match operation to devices discovered later.  A device may
+have only one TSM association.
+
+The assignment-only role is mutually exclusive with another provider owning
+the same PCI function.  MSHV registration must fail or skip the function if it
+already has a TSM association; it must never replace an existing provider.
+
+vIOMMU operations
+~~~~~~~~~~~~~~~~~
+
+The MSHV provider supplies one complete struct iommufd_viommu_ops:
+
+  get_viommu_size()
+    Return the size of the MSHV vIOMMU object.
+
+  viommu_init()
+    - require IOMMU_VIOMMU_TYPE_HYPERVISOR
+    - require a parentless vIOMMU
+    - copy and validate struct iommu_viommu_hypervisor
+    - acquire and retain the VM file
+    - validate that it is an MSHV partition file
+    - obtain and store the Hyper-V partition ID
+
+  destroy()
+    Drop the retained VM-file reference.
+
+  alloc_domain_external()
+    Allocate a Hyper-V IOMMU_DOMAIN_EXTERNAL domain using a helper exported by
+    the Hyper-V root-IOMMU driver.  The domain stores the partition ID and the
+    owning vIOMMU.
+
+  vdevice_init()
+    Pin the partition's registered memory before the physical device can be
+    attached.  Existing MSHV locking and the pt_regions_pinned state make this
+    operation idempotent across multiple vDEVICE objects.
+
+Phase 1 does not provide vdevice_tsm_req and does not advertise any TDISP
+request operation.
+
+External attach
+~~~~~~~~~~~~~~~
+
+The external-domain attach operation remains in the Hyper-V root-IOMMU driver
+because it implements the physical IOMMU domain operation.  It:
+
+  1. obtains the vDEVICE ID from the owning MSHV vIOMMU
+  2. verifies that partition memory was prepared by vdevice_init()
+  3. issues HVCALL_ATTACH_DEVICE with the partition and vDEVICE IDs
+
+The hypercall atomically replaces the old assignment.  A failure leaves the
+old domain attached.
+
+The MSHV provider calls exported Hyper-V root-IOMMU helpers for domain
+allocation and attachment mechanics.  The root-IOMMU driver must not inspect
+an MSHV VM file or call back into MSHV partition-file operations.
+
+
+Selection and failure behavior
+------------------------------
+
+For a PCI device associated with the MSHV TSM, IOMMUFD must use the MSHV
+vIOMMU operations.  It must not silently fall back to the physical-IOMMU
+provider if the MSHV operations reject allocation.  Otherwise behavior would
+depend on provider registration timing and could bypass MSHV policy.
+
+Devices with no TSM association continue to use
+iommu_ops->get_viommu_ops().  This preserves the existing behavior for
+unrelated physical IOMMU drivers.
+
+Phase 1 returns:
+
+  - EBADF for an invalid VM fd
+  - EINVAL when the fd is not an MSHV partition
+  - EINVAL for a nonzero parent HWPT
+  - EOPNOTSUPP for unsupported vIOMMU types, flags, or device classes
+  - the original MSHV error when partition-memory pinning fails
+  - EBUSY when provider or device teardown races a dependent object
+
+
+Lifetime and teardown
+---------------------
+
+The object lifetime is:
+
+  MSHV TSM
+    -> PCI/TSM device association
+      -> IOMMUFD vIOMMU
+        -> vDEVICE
+        -> external HWPT and IOMMU domain
+
+Obtaining vIOMMU operations pins the MSHV module.  The reference is held until
+the vIOMMU is destroyed.
+
+Teardown proceeds in reverse order:
+
+  1. destroy vDEVICE objects
+  2. detach and destroy external HWPTs and domains
+  3. destroy the vIOMMU and release the VM file
+  4. remove the PCI/TSM association
+  5. unregister the MSHV TSM
+
+TSM unregistration prevents new associations and vIOMMU allocations before
+draining or rejecting teardown while dependent objects remain.
+
+
+Phase 2: IDE, TDISP, and trusted MMIO
+------------------------------------
+
+Phase 2 extends the existing MSHV provider; it does not introduce a second
+provider or move existing vIOMMU objects.
+
+It adds:
+
+  - Hyper-V-managed IDE connection establishment and teardown
+  - per-vDEVICE TDISP state
+  - forwarding of guest TSM requests to Hyper-V
+  - TDISP state transitions from UNLOCKED to LOCKED to RUN
+  - rollback to the previous state when a transition fails
+  - trusted-MMIO range validation and private/shared conversion
+  - host mapping revocation before a BAR range becomes private
+  - restoration of host accessibility only after Hyper-V makes the range
+    shared
+
+At that point the assignment-only PCI/TSM association becomes a full
+device-security association.  The phase-1 matching, ownership, object
+lifetime, and vIOMMU selection remain unchanged.
+
+
+Validation
+----------
+
+Phase 1 tests cover:
+
+  - automatic association of existing root-IOMMU-managed PCI devices
+  - association of devices discovered after MSHV registration
+  - refusal to replace an existing PCI/TSM provider
+  - MSHV TSM precedence over physical-IOMMU vIOMMU operations
+  - physical-IOMMU fallback for unrelated devices
+  - invalid and non-MSHV VM fds
+  - rejection of a parent HWPT
+  - one-time partition-memory pinning with multiple vDEVICE objects
+  - propagation of memory-pinning failures
+  - attach failure preserving the old domain
+  - module and object lifetime during device and MSHV teardown
+  - rejection of guest TSM requests because phase 1 advertises no support
+
+Phase 2 tests additionally cover:
+
+  - every valid TDISP state transition
+  - rejection of invalid transitions
+  - IDE and TDISP failure rollback
+  - device reset and surprise-removal cleanup
+  - trusted-MMIO private/shared conversion ordering
+  - host mapping revocation while trusted MMIO is private
+
+
+Result
+------
+
+Phase 1 removes mshv_partition_file_ops_register() and makes MSHV the owner of
+the complete Hyper-V external-assignment vIOMMU.  It remains independently
+useful without claiming that TDISP is implemented.
+
+Phase 2 adds device-security behavior to the same provider without changing
+the userspace vIOMMU ownership model or reworking external attach.
