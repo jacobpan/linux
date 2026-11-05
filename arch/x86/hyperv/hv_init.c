@@ -580,7 +580,8 @@ skip_hypercall_pg_init:
 	x86_init.timers.setup_percpu_clockev = hv_stimer_setup_percpu_clockev;
 
 #ifdef CONFIG_HYPERV_PVIOMMU
-	x86_init.iommu.iommu_init = hv_iommu_init;
+	if (!hv_root_partition())
+		x86_init.iommu.iommu_init = hv_pviommu_init;
 #endif
 
 	hv_apic_init();

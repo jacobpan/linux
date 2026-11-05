@@ -601,7 +601,7 @@ hv_init_iommu_device(struct hv_iommu_dev *hv_iommu,
 	hv_iommu_device = hv_iommu;
 }
 
-int __init hv_iommu_init(void)
+int __init hv_pviommu_init(void)
 {
 	u64 status;
 	int ret = 0;
