@@ -549,6 +549,7 @@ union hv_device_id {		/* HV_DEVICE_ID */
 } __packed;
 
 /* Device domain types */
+#define HV_DEVICE_DOMAIN_TYPE_S2	0 /* HV_DEVICE_DOMAIN_ID_TYPE_S2 */
 #define HV_DEVICE_DOMAIN_TYPE_S1	1 /* HV_DEVICE_DOMAIN_ID_TYPE_S1 */
 
 /* ID for default domain and NULL domain */
@@ -655,6 +656,20 @@ struct hv_output_get_iommu_capabilities {
 
 	u64 iommu_cap;
 	u64 pgsize_bitmap;
+} __packed;
+
+struct hv_input_map_device_gpa_pages { /* HV_INPUT_MAP_DEVICE_GPA_PAGES */
+	struct hv_input_device_domain device_domain;
+	union hv_input_vtl target_vtl;
+	u8 padding[3];
+	u32 map_flags;
+	u64 target_device_va_base;
+	u64 gpa_page_list[];
+} __packed;
+
+struct hv_input_unmap_device_gpa_pages {  /* HV_INPUT_UNMAP_DEVICE_GPA_PAGES */
+	struct hv_input_device_domain device_domain;
+	u64 target_device_va_base;
 } __packed;
 
 /* HV_LOGICAL_DEVICE_PROPERTY_CODE */
