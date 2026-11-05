@@ -22,7 +22,7 @@
  * Returns: number of pages allocated or -ENOMEM
  */
 static int hv_alloc_dep_pages(int node, u64 *pfna, u64 *lastpfnp, int num_pages,
-			      bool single)
+			      bool single, gfp_t gfp_flags)
 {
 	struct page *page;
 	int num_allocd, count = 0;
@@ -37,7 +37,6 @@ static int hv_alloc_dep_pages(int node, u64 *pfna, u64 *lastpfnp, int num_pages,
 	while (num_pages) {
 		/* Find highest order we can actually allocate */
 		int order = 31 - __builtin_clz(num_pages);
-		gfp_t gfp_flags = GFP_KERNEL;
 
 		if (!single)
 			gfp_flags |= __GFP_NOWARN;
@@ -81,7 +80,8 @@ static int hv_alloc_dep_pages(int node, u64 *pfna, u64 *lastpfnp, int num_pages,
  * so we must split that also. Lastly, HV_MAX_CONTIGUOUS_ALLOCATION_PAGES is
  * not guaranteed to always be power of 2.
  */
-static int hv_call_deposit_pages(int node, u64 partition_id, bool contiguous)
+static int hv_call_deposit_pages(int node, u64 partition_id, bool contiguous,
+				 gfp_t gfp_flags)
 {
 	struct hv_deposit_memory *hc_input;
 	int i, rc, num_pages;
@@ -98,14 +98,15 @@ static int hv_call_deposit_pages(int node, u64 partition_id, bool contiguous)
 		num_pages = HV_DEPOSIT_MAX;
 	}
 
-	hc_input = (struct hv_deposit_memory *)get_zeroed_page(GFP_KERNEL);
+	hc_input = (struct hv_deposit_memory *)get_zeroed_page(gfp_flags);
 	if (hc_input == NULL)
 		return -ENOMEM;
 
 	hc_input->partition_id = partition_id;
 	pfna = hc_input->gpa_page_list;
 
-	rc = hv_alloc_dep_pages(node, pfna, &lastpfn, num_pages, contiguous);
+	rc = hv_alloc_dep_pages(node, pfna, &lastpfn, num_pages, contiguous,
+				gfp_flags);
 	if (rc < 0)
 		goto out_free;
 
@@ -159,7 +160,7 @@ out_free:
 	return rc;
 }
 
-int hv_deposit_memory_node(int node, u64 pt_id, u64 hv_status)
+int hv_deposit_memory_node(int node, u64 pt_id, u64 hv_status, gfp_t gfp_flags)
 {
 	int result = hv_result(hv_status);
 	bool contiguous = false;
@@ -179,7 +180,7 @@ int hv_deposit_memory_node(int node, u64 pt_id, u64 hv_status)
 	    result == HV_STATUS_INSUFFICIENT_CONTIGUOUS_ROOT_MEMORY)
 		contiguous = true;
 
-	return hv_call_deposit_pages(node, pt_id, contiguous);
+	return hv_call_deposit_pages(node, pt_id, contiguous, gfp_flags);
 }
 EXPORT_SYMBOL_GPL(hv_deposit_memory_node);
 
@@ -232,7 +233,7 @@ int hv_call_add_logical_proc(int node, u32 lp_index, u32 apic_id)
 			break;
 		}
 		ret = hv_deposit_memory_node(node, hv_current_partition_id,
-					     status);
+					     status, GFP_KERNEL);
 	} while (!ret);
 
 	return ret;
@@ -266,7 +267,8 @@ int hv_call_create_vp(int node, u64 partition_id, u32 vp_index, u32 flags)
 			}
 			break;
 		}
-		ret = hv_deposit_memory_node(node, partition_id, status);
+		ret = hv_deposit_memory_node(node, partition_id, status,
+					     GFP_KERNEL);
 
 	} while (!ret);
 
