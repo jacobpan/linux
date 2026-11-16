@@ -61,9 +61,6 @@ static struct tsm_dev *tsm_register_pci_or_reset(struct tsm_dev *tsm_dev,
 {
 	int rc;
 
-	if (!pci_ops)
-		return tsm_dev;
-
 	tsm_dev->pci_ops = pci_ops;
 	rc = pci_tsm_register(tsm_dev);
 	if (rc) {
@@ -83,6 +80,9 @@ struct tsm_dev *tsm_register(struct device *parent, struct pci_tsm_ops *pci_ops)
 	struct tsm_dev *tsm_dev __free(put_tsm_dev) = alloc_tsm_dev(parent);
 	struct device *dev;
 	int rc;
+
+	if (!pci_ops)
+		return ERR_PTR(-EINVAL);
 
 	if (IS_ERR(tsm_dev))
 		return tsm_dev;
