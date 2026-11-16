@@ -191,6 +191,83 @@ TSM unregistration prevents new associations and vIOMMU allocations before
 draining or rejecting teardown while dependent objects remain.
 
 
+Validation against the Hyper-V device-security architecture
+------------------------------------------------------------
+
+The Hyper-V device-security design supports using one MSHV provider for
+external assignment and later trusted-I/O operations, with one terminology
+qualification: MSHV is not itself the platform TSM.
+
+The platform TSM is implemented by a trusted platform component:
+
+  - AMD PSP for SEV-TIO
+  - the Intel TDX module for TDX Connect
+  - Arm RMM for CCA/RME-DA
+
+Hyper-V is the intermediary between the root partition and that platform TSM.
+It maintains the device objects and security state, forwards operations to the
+platform TSM, and exposes a platform-independent hypercall interface.  The
+Linux MSHV provider is therefore the host-facing provider for Hyper-V's TSM
+service rather than the underlying TSM implementation.
+
+Hyper-V maintains two related levels of device state:
+
+  physical device
+    Represents the hardware function identified by its RID.  It owns the SPDM
+    responder relationship, physical-device security state, certificates,
+    measurements, and IDE setup.
+
+  logical device
+    Represents the device assigned to a specific guest partition.  It carries
+    the logical device ID used by external assignment and owns the TDI state
+    for that assignment.
+
+The trusted-I/O lifecycle is layered on an existing logical-device assignment:
+
+  external assignment / logical device creation
+    -> create the TDI context
+    -> CONFIG_UNLOCKED
+    -> CONFIG_LOCKED
+    -> RUN
+
+Enabling logical-device security creates the TDI context and associates it
+with the physical SPDM responder.  It does not create the underlying device
+assignment.  The logical device and partition identity used for assignment
+are subsequently reused for TDI locking, attestation, transition to RUN,
+guest-message forwarding, and teardown.
+
+This validates the phase split in this document:
+
+  Phase 1
+    Establish the Hyper-V logical-device assignment and its IOMMUFD vIOMMU and
+    vDEVICE ownership without claiming trusted private-memory access.
+
+  Phase 2
+    Add the TDI context and drive CONFIG_UNLOCKED, CONFIG_LOCKED, and RUN on
+    the same Hyper-V logical-device association.
+
+The root partition still performs per-device host work, including DOE/SPDM
+transport, certificate and measurement handling, and endpoint selective-IDE
+programming.  A global MSHV tsm_dev therefore does not eliminate per-PCI-device
+state.  It supplies the common Hyper-V backend while PCI/TSM device contexts
+retain device-specific protocol and lifecycle state.
+
+The design supports the assumption that one MSHV provider can own both
+assignment and future TDISP operations when:
+
+  1. MSHV remains the Linux-facing authority for the Hyper-V partition and
+     logical-device association.
+  2. The same provider integrates the per-device SPDM, IDE, and TDI operations
+     required by Hyper-V.
+
+It does not establish that assignment is generically a TSM responsibility.
+That remains a Linux interface-design choice.  It establishes only that, for
+Hyper-V, assignment and trusted-I/O security share one logical-device identity,
+one partition association, and one hypervisor-mediated lifecycle.  PCI/TSM
+must also support assignment and device-security roles belonging to the same
+provider without preventing the required per-device link-security state.
+
+
 Phase 2: IDE, TDISP, and trusted MMIO
 ------------------------------------
 
