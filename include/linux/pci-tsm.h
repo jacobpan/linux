@@ -12,13 +12,6 @@ struct pci_tsm;
 struct pci_tsm_context;
 struct tsm_dev;
 
-struct pci_tsm_assignment_ops {
-	bool (*match)(struct pci_dev *pdev);
-	struct pci_tsm *(*probe)(struct tsm_dev *tsm_dev,
-				 struct pci_dev *pdev);
-	void (*remove)(struct pci_tsm *tsm);
-};
-
 /*
  * struct pci_tsm_ops - manage confidential links and security state
  * @assignment_ops: Associate PCI functions with a TSM-owned vIOMMU without
@@ -48,7 +41,13 @@ struct pci_tsm_ops {
 	struct module *owner;
 	const struct iommufd_viommu_ops *(*viommu_get_ops)(
 		struct device *dev, enum iommu_viommu_type type);
-	struct pci_tsm_assignment_ops assignment_ops;
+
+	struct pci_tsm_assignment_ops {
+		bool (*match)(struct pci_dev *pdev);
+		struct pci_tsm *(*probe)(struct tsm_dev *tsm_dev,
+					 struct pci_dev *pdev);
+		void (*remove)(struct pci_tsm *tsm);
+	} assignment_ops;
 
 	/*
 	 * struct pci_tsm_link_ops - Manage physical link and the TSM/DSM session
