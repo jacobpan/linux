@@ -5581,13 +5581,18 @@ static struct file_operations kvm_vm_fops = {
 	KVM_COMPAT(kvm_vm_compat_ioctl),
 };
 
-#ifdef kvm_file_to_kvm_arch
-struct kvm *kvm_file_to_kvm_fn(struct file *file)
+struct kvm *file_to_kvm(struct file *file)
 {
 	if (!file || file->f_op != &kvm_vm_fops)
 		return NULL;
-
 	return file->private_data;
+}
+EXPORT_SYMBOL_FOR_KVM_INTERNAL(file_to_kvm);
+
+#ifdef kvm_file_to_kvm_arch
+struct kvm *kvm_file_to_kvm_fn(struct file *file)
+{
+	return file_to_kvm(file);
 }
 EXPORT_SYMBOL_GPL(kvm_file_to_kvm_fn);
 #endif
@@ -6652,6 +6657,10 @@ int kvm_init(unsigned vcpu_size, unsigned vcpu_align, struct module *module)
 	if (r)
 		goto err_virt;
 
+	r = kvm_iommufd_init(module);
+	if (r)
+		goto err_iommufd;
+
 	/*
 	 * Registration _must_ be the very last thing done, as this exposes
 	 * /dev/kvm to userspace, i.e. all infrastructure must be setup!
@@ -6665,6 +6674,8 @@ int kvm_init(unsigned vcpu_size, unsigned vcpu_align, struct module *module)
 	return 0;
 
 err_register:
+	kvm_iommufd_exit();
+err_iommufd:
 	kvm_uninit_virtualization();
 err_virt:
 	kvm_gmem_exit();
@@ -6694,6 +6705,7 @@ void kvm_exit(void)
 	 * to KVM while the module is being stopped.
 	 */
 	misc_deregister(&kvm_dev);
+	kvm_iommufd_exit();
 
 	kvm_uninit_virtualization();
 

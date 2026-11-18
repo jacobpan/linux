@@ -215,8 +215,20 @@ void iommufd_device_destroy(struct iommufd_object *obj)
 	/* igroup is NULL when destroy called during bind error cleanup */
 	if (!idev->igroup)
 		return;
-	if (!iommufd_device_is_noiommu(idev))
+	if (!iommufd_device_is_noiommu(idev)) {
+		mutex_lock(&idev->igroup->lock);
+		if (idev->igroup->external_blocking_handle &&
+		    !idev->igroup->external_vdevice &&
+		    !idev->igroup->external_reclaim_failed) {
+			iommu_detach_group_handle(dev_iommu_ops(idev->dev)
+							  ->blocked_domain,
+						  idev->igroup->group);
+			kfree(idev->igroup->external_blocking_handle);
+			idev->igroup->external_blocking_handle = NULL;
+		}
+		mutex_unlock(&idev->igroup->lock);
 		iommu_device_release_dma_owner(idev->dev);
+	}
 	iommufd_put_group(idev->igroup);
 	if (!iommufd_selftest_is_mock_dev(idev->dev))
 		iommufd_ctx_put(idev->ictx);
@@ -435,6 +447,14 @@ static unsigned int iommufd_group_device_num(struct iommufd_group *igroup,
 		xa_for_each(&attach->device_array, index, idev)
 			count++;
 	return count;
+}
+
+static int iommufd_count_group_device(struct device *dev, void *data)
+{
+	unsigned int *count = data;
+
+	(*count)++;
+	return *count > 1;
 }
 
 #ifdef CONFIG_IRQ_MSI_IOMMU
@@ -679,6 +699,31 @@ out_free_handle:
 	return rc;
 }
 
+static int
+iommufd_hwpt_replace_external_blocking(struct iommufd_device *idev,
+				       struct iommufd_hw_pagetable *hwpt)
+{
+	struct iommufd_group *igroup = idev->igroup;
+	struct iommufd_attach_handle *handle;
+	int rc;
+
+	handle = kzalloc_obj(*handle);
+	if (!handle)
+		return -ENOMEM;
+	handle->idev = idev;
+
+	rc = iommu_replace_group_handle(igroup->group, hwpt->domain,
+					&handle->handle);
+	if (rc) {
+		kfree(handle);
+		return rc;
+	}
+
+	kfree(igroup->external_blocking_handle);
+	igroup->external_blocking_handle = NULL;
+	return 0;
+}
+
 int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
 				struct iommufd_device *idev, ioasid_t pasid)
 {
@@ -691,6 +736,11 @@ int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
 	int rc;
 
 	mutex_lock(&igroup->lock);
+	if (igroup->external_transition || igroup->external_vdevice ||
+	    igroup->external_reclaim_failed) {
+		rc = -EBUSY;
+		goto err_unlock;
+	}
 
 	attach = xa_cmpxchg(&igroup->pasid_attach, pasid, NULL,
 			    XA_ZERO_ENTRY, GFP_KERNEL);
@@ -736,7 +786,11 @@ int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
 	 * attachment.
 	 */
 	if (iommufd_group_first_attach(igroup, pasid)) {
-		rc = iommufd_hwpt_attach_device(hwpt, idev, pasid);
+		if (pasid == IOMMU_NO_PASID &&
+		    igroup->external_blocking_handle)
+			rc = iommufd_hwpt_replace_external_blocking(idev, hwpt);
+		else
+			rc = iommufd_hwpt_attach_device(hwpt, idev, pasid);
 		if (rc)
 			goto err_unresv;
 		attach->hwpt = hwpt;
@@ -773,6 +827,11 @@ iommufd_hw_pagetable_detach(struct iommufd_device *idev, ioasid_t pasid)
 	struct iommufd_attach *attach;
 
 	mutex_lock(&igroup->lock);
+	if (igroup->external_transition || igroup->external_vdevice ||
+	    igroup->external_reclaim_failed) {
+		mutex_unlock(&igroup->lock);
+		return NULL;
+	}
 	attach = xa_load(&igroup->pasid_attach, pasid);
 	if (!attach) {
 		mutex_unlock(&igroup->lock);
@@ -874,6 +933,11 @@ iommufd_device_do_replace(struct iommufd_device *idev, ioasid_t pasid,
 	int rc;
 
 	mutex_lock(&igroup->lock);
+	if (igroup->external_transition || igroup->external_vdevice ||
+	    igroup->external_reclaim_failed) {
+		rc = -EBUSY;
+		goto err_unlock;
+	}
 
 	attach = xa_load(&igroup->pasid_attach, pasid);
 	if (!attach) {
@@ -932,6 +996,162 @@ err_unresv:
 err_unlock:
 	mutex_unlock(&igroup->lock);
 	return ERR_PTR(rc);
+}
+
+int iommufd_device_prepare_external(struct iommufd_device *idev,
+				    struct iommufd_external_txn *txn)
+{
+	struct iommufd_group *igroup = idev->igroup;
+	struct iommufd_attach_handle *old_handle;
+	struct iommufd_attach *attach;
+	struct iommu_domain *blocking;
+	unsigned long index;
+	unsigned int count = 0;
+	int rc;
+
+	memset(txn, 0, sizeof(*txn));
+	mutex_lock(&igroup->lock);
+
+	if (igroup->external_transition || igroup->external_vdevice ||
+	    igroup->external_reclaim_failed) {
+		rc = -EBUSY;
+		goto out_unlock;
+	}
+
+	rc = iommu_group_for_each_dev(igroup->group, &count,
+				      iommufd_count_group_device);
+	if (rc || count != 1) {
+		rc = -EBUSY;
+		goto out_unlock;
+	}
+
+	xa_for_each(&igroup->pasid_attach, index, attach) {
+		if (index != IOMMU_NO_PASID) {
+			rc = -EBUSY;
+			goto out_unlock;
+		}
+	}
+
+	blocking = dev_iommu_ops(idev->dev)->blocked_domain;
+	if (!blocking) {
+		rc = -EOPNOTSUPP;
+		goto out_unlock;
+	}
+
+	igroup->external_transition = true;
+	attach = xa_load(&igroup->pasid_attach, IOMMU_NO_PASID);
+	if (!attach) {
+		mutex_unlock(&igroup->lock);
+		return 0;
+	}
+	if (iommufd_group_device_num(igroup, IOMMU_NO_PASID) != 1 ||
+	    !iommufd_device_is_attached(idev, IOMMU_NO_PASID)) {
+		rc = -EBUSY;
+		goto out_clear_transition;
+	}
+
+	txn->blocking_handle = kzalloc_obj(*txn->blocking_handle);
+	if (!txn->blocking_handle) {
+		rc = -ENOMEM;
+		goto out_clear_transition;
+	}
+	txn->blocking_handle->idev = idev;
+	old_handle = iommufd_device_get_attach_handle(idev, IOMMU_NO_PASID);
+	rc = iommu_replace_group_handle(igroup->group, blocking,
+					&txn->blocking_handle->handle);
+	if (rc)
+		goto out_free_blocking;
+
+	txn->had_attach = true;
+	txn->old_hwpt = attach->hwpt;
+	iommufd_auto_response_faults(txn->old_hwpt, old_handle);
+	kfree(old_handle);
+	mutex_unlock(&igroup->lock);
+	return 0;
+
+out_free_blocking:
+	kfree(txn->blocking_handle);
+	txn->blocking_handle = NULL;
+out_clear_transition:
+	igroup->external_transition = false;
+out_unlock:
+	mutex_unlock(&igroup->lock);
+	return rc;
+}
+
+static void
+iommufd_device_finish_external(struct iommufd_device *idev,
+			       struct iommufd_vdevice *vdev,
+			       struct iommufd_external_txn *txn,
+			       bool quarantine)
+{
+	struct iommufd_group *igroup = idev->igroup;
+	struct iommufd_hwpt_paging *hwpt_paging;
+	struct iommufd_attach *attach;
+
+	mutex_lock(&igroup->lock);
+	if (txn->had_attach) {
+		attach = xa_erase(&igroup->pasid_attach, IOMMU_NO_PASID);
+		hwpt_paging = find_hwpt_paging(txn->old_hwpt);
+		if (hwpt_paging)
+			iopt_remove_reserved_iova(&hwpt_paging->ioas->iopt,
+						  idev->dev);
+		xa_destroy(&attach->device_array);
+		kfree(attach);
+		refcount_dec(&idev->obj.users);
+		igroup->external_blocking_handle = txn->blocking_handle;
+		txn->blocking_handle = NULL;
+	}
+	igroup->external_vdevice = vdev;
+	igroup->external_reclaim_failed = quarantine;
+	igroup->external_transition = false;
+	mutex_unlock(&igroup->lock);
+
+	if (txn->old_hwpt)
+		iommufd_hw_pagetable_put(idev->ictx, txn->old_hwpt);
+}
+
+void iommufd_device_commit_external(struct iommufd_device *idev,
+				    struct iommufd_vdevice *vdev,
+				    struct iommufd_external_txn *txn)
+{
+	iommufd_device_finish_external(idev, vdev, txn, false);
+}
+
+int iommufd_device_abort_external(struct iommufd_device *idev,
+				  struct iommufd_external_txn *txn)
+{
+	struct iommufd_group *igroup = idev->igroup;
+	struct iommufd_attach_handle *handle;
+	int rc = 0;
+
+	mutex_lock(&igroup->lock);
+	if (txn->had_attach) {
+		handle = kzalloc_obj(*handle);
+		if (!handle) {
+			rc = -ENOMEM;
+			goto out_unlock;
+		}
+		handle->idev = idev;
+		rc = iommu_replace_group_handle(igroup->group,
+						txn->old_hwpt->domain,
+						&handle->handle);
+		if (rc)
+			kfree(handle);
+		else
+			kfree(txn->blocking_handle);
+	}
+	if (!rc)
+		igroup->external_transition = false;
+out_unlock:
+	mutex_unlock(&igroup->lock);
+	return rc;
+}
+
+void iommufd_device_quarantine_external(struct iommufd_device *idev,
+					struct iommufd_external_txn *txn)
+{
+	iommufd_device_finish_external(idev, NULL, txn, true);
 }
 
 typedef struct iommufd_hw_pagetable *(*attach_fn)(
@@ -1073,8 +1293,7 @@ out_put_pt_obj:
  * iommufd_device_attach - Connect a device/pasid to an iommu_domain
  * @idev: device to attach
  * @pasid: pasid to attach
- * @pt_id: Input an IOMMUFD_OBJ_IOAS, or IOMMUFD_OBJ_HWPT_PAGING
- *         Output the IOMMUFD_OBJ_HWPT_PAGING ID
+ * @pt_id: Input an IOMMUFD_OBJ_IOAS or IOMMUFD_OBJ_HWPT. Output the HWPT ID
  *
  * This connects the device/pasid to an iommu_domain, either automatically
  * or manually selected. Once this completes the device could do DMA with
@@ -1106,8 +1325,7 @@ EXPORT_SYMBOL_NS_GPL(iommufd_device_attach, "IOMMUFD");
  * iommufd_device_replace - Change the device/pasid's iommu_domain
  * @idev: device to change
  * @pasid: pasid to change
- * @pt_id: Input an IOMMUFD_OBJ_IOAS, or IOMMUFD_OBJ_HWPT_PAGING
- *         Output the IOMMUFD_OBJ_HWPT_PAGING ID
+ * @pt_id: Input an IOMMUFD_OBJ_IOAS or IOMMUFD_OBJ_HWPT. Output the HWPT ID
  *
  * This is the same as::
  *

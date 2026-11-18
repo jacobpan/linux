@@ -487,6 +487,12 @@ extern const struct iommu_ops iommufd_noiommu_ops;
 
 struct iommufd_attach;
 
+struct iommufd_external_txn {
+	struct iommufd_hw_pagetable *old_hwpt;
+	struct iommufd_attach_handle *blocking_handle;
+	bool had_attach;
+};
+
 struct iommufd_group {
 	struct kref ref;
 	struct mutex lock;
@@ -495,6 +501,10 @@ struct iommufd_group {
 	struct xarray pasid_attach;
 	struct iommufd_sw_msi_maps required_sw_msi;
 	phys_addr_t sw_msi_start;
+	struct iommufd_attach_handle *external_blocking_handle;
+	struct iommufd_vdevice *external_vdevice;
+	bool external_transition;
+	bool external_reclaim_failed;
 };
 
 /*
@@ -537,6 +547,15 @@ iommufd_device_get_iommu_dev(struct iommufd_device *idev)
 void iommufd_device_pre_destroy(struct iommufd_object *obj);
 void iommufd_device_destroy(struct iommufd_object *obj);
 int iommufd_get_hw_info(struct iommufd_ucmd *ucmd);
+int iommufd_device_prepare_external(struct iommufd_device *idev,
+				    struct iommufd_external_txn *txn);
+void iommufd_device_commit_external(struct iommufd_device *idev,
+				    struct iommufd_vdevice *vdev,
+				    struct iommufd_external_txn *txn);
+int iommufd_device_abort_external(struct iommufd_device *idev,
+				  struct iommufd_external_txn *txn);
+void iommufd_device_quarantine_external(struct iommufd_device *idev,
+					struct iommufd_external_txn *txn);
 
 struct device *iommufd_global_device(void);
 
@@ -726,6 +745,7 @@ iommufd_viommu_find_veventq(struct iommufd_viommu *viommu,
 int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd);
 void iommufd_viommu_destroy(struct iommufd_object *obj);
 int iommufd_vdevice_alloc_ioctl(struct iommufd_ucmd *ucmd);
+int iommufd_vdevice_prepare_destroy(struct iommufd_object *obj, bool force);
 void iommufd_vdevice_destroy(struct iommufd_object *obj);
 void iommufd_vdevice_abort(struct iommufd_object *obj);
 int iommufd_hw_queue_alloc_ioctl(struct iommufd_ucmd *ucmd);
@@ -742,6 +762,9 @@ bool iommufd_should_fail(void);
 int __init iommufd_test_init(void);
 void iommufd_test_exit(void);
 bool iommufd_selftest_is_mock_dev(struct device *dev);
+const struct iommufd_viommu_ops *
+iommufd_selftest_get_viommu_ops(struct file *vm_file, struct device *dev,
+				enum iommu_viommu_type type);
 int iommufd_test_dma_buf_iommufd_map(struct dma_buf_attachment *attachment,
 				     struct phys_vec *phys);
 #else

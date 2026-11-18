@@ -1075,6 +1075,7 @@ void kvm_exit(void);
 void kvm_get_kvm(struct kvm *kvm);
 bool kvm_get_kvm_safe(struct kvm *kvm);
 void kvm_put_kvm(struct kvm *kvm);
+struct kvm *file_to_kvm(struct file *file);
 
 /*
  * Architectures define kvm_file_to_kvm_arch to <arch>
@@ -1086,6 +1087,25 @@ void kvm_put_kvm(struct kvm *kvm);
 #define kvm_file_to_kvm_fn CONCATENATE(file_to_kvm_, kvm_file_to_kvm_arch)
 struct kvm *kvm_file_to_kvm_fn(struct file *file);
 #endif /* kvm_file_to_kvm_arch */
+
+struct iommufd_viommu_ops;
+enum iommu_viommu_type;
+const struct iommufd_viommu_ops *
+kvm_arch_iommufd_get_viommu_ops(struct kvm *kvm, struct device *dev,
+				enum iommu_viommu_type type);
+#if IS_ENABLED(CONFIG_IOMMUFD_DRIVER_CORE)
+int kvm_iommufd_init(struct module *owner);
+void kvm_iommufd_exit(void);
+#else
+static inline int kvm_iommufd_init(struct module *owner)
+{
+	return 0;
+}
+
+static inline void kvm_iommufd_exit(void)
+{
+}
+#endif
 
 void kvm_put_kvm_no_destroy(struct kvm *kvm);
 

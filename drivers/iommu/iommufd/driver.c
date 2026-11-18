@@ -3,6 +3,80 @@
  */
 #include "iommufd_private.h"
 
+static DEFINE_MUTEX(iommufd_viommu_file_provider_lock);
+static LIST_HEAD(iommufd_viommu_file_providers);
+
+int iommufd_viommu_file_provider_register(
+	struct iommufd_viommu_file_provider *provider)
+{
+	struct iommufd_viommu_file_provider *cur;
+	int rc = 0;
+
+	if (!provider->get_ops)
+		return -EINVAL;
+
+	mutex_lock(&iommufd_viommu_file_provider_lock);
+	list_for_each_entry(cur, &iommufd_viommu_file_providers, node) {
+		if (cur == provider) {
+			rc = -EEXIST;
+			goto out_unlock;
+		}
+	}
+	list_add_tail(&provider->node, &iommufd_viommu_file_providers);
+out_unlock:
+	mutex_unlock(&iommufd_viommu_file_provider_lock);
+	return rc;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_viommu_file_provider_register, "IOMMUFD");
+
+void iommufd_viommu_file_provider_unregister(
+	struct iommufd_viommu_file_provider *provider)
+{
+	struct iommufd_viommu_file_provider *cur;
+	bool found = false;
+
+	mutex_lock(&iommufd_viommu_file_provider_lock);
+	list_for_each_entry(cur, &iommufd_viommu_file_providers, node) {
+		if (cur == provider) {
+			list_del_init(&provider->node);
+			found = true;
+			break;
+		}
+	}
+	mutex_unlock(&iommufd_viommu_file_provider_lock);
+	WARN_ON(!found);
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_viommu_file_provider_unregister, "IOMMUFD");
+
+const struct iommufd_viommu_ops *
+iommufd_viommu_file_provider_get_ops(
+	struct file *vm_file, struct device *dev, enum iommu_viommu_type type,
+	struct iommufd_viommu_file_provider **provider)
+{
+	struct iommufd_viommu_file_provider *cur;
+	const struct iommufd_viommu_ops *ops;
+
+	mutex_lock(&iommufd_viommu_file_provider_lock);
+	list_for_each_entry(cur, &iommufd_viommu_file_providers, node) {
+		if (!try_module_get(cur->owner))
+			continue;
+		ops = cur->get_ops(vm_file, dev, type);
+		if (!IS_ERR(ops)) {
+			*provider = cur;
+			goto out_unlock;
+		}
+		module_put(cur->owner);
+		if (PTR_ERR(ops) != -EBADFD &&
+		    PTR_ERR(ops) != -EOPNOTSUPP)
+			goto out_unlock;
+	}
+	ops = ERR_PTR(-EOPNOTSUPP);
+out_unlock:
+	mutex_unlock(&iommufd_viommu_file_provider_lock);
+	return ops;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_viommu_file_provider_get_ops, "IOMMUFD");
+
 /* Driver should use a per-structure helper in include/linux/iommufd.h */
 int _iommufd_object_depend(struct iommufd_object *obj_dependent,
 			   struct iommufd_object *obj_depended)
@@ -125,6 +199,12 @@ int iommufd_viommu_get_vdev_id(struct iommufd_viommu *viommu,
 	return rc;
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_viommu_get_vdev_id, "IOMMUFD");
+
+struct device *iommufd_vdevice_get_device(struct iommufd_vdevice *vdev)
+{
+	return vdev->idev->dev;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_vdevice_get_device, "IOMMUFD");
 
 /*
  * Typically called in driver's threaded IRQ handler.

@@ -273,6 +273,22 @@ void mshv_isr(void);
 int mshv_synic_init(struct device *dev);
 void mshv_synic_exit(void);
 
+u64 mshv_partition_file_get_partid_internal(struct file *file);
+int mshv_partition_file_prepare_attach_internal(struct file *file);
+#if IS_ENABLED(CONFIG_IOMMUFD_DRIVER_CORE)
+int mshv_iommufd_init(void);
+void mshv_iommufd_exit(void);
+#else
+static inline int mshv_iommufd_init(void)
+{
+	return 0;
+}
+
+static inline void mshv_iommufd_exit(void)
+{
+}
+#endif
+
 static inline bool mshv_partition_encrypted(struct mshv_partition *partition)
 {
 	return partition->isolation_type == HV_PARTITION_ISOLATION_TYPE_SNP;

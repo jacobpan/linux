@@ -18,6 +18,7 @@ mshv_root-y := mshv_root_main.o mshv_synic.o mshv_eventfd.o mshv_irq.o \
                mshv_vfio.o
 mshv_root-$(CONFIG_DEBUG_FS) += mshv_debugfs.o
 mshv_root-$(CONFIG_TRACEPOINTS) += mshv_trace.o
+mshv_root-$(CONFIG_IOMMUFD_DRIVER_CORE) += mshv_iommufd.o
 mshv_vtl-y := mshv_vtl_main.o
 
 # Code that must be built-in

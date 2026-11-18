@@ -10,6 +10,7 @@
 #include <linux/fault-inject.h>
 #include <linux/file.h>
 #include <linux/iommu.h>
+#include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/sizes.h>
@@ -24,6 +25,7 @@
 #include "iommufd_test.h"
 
 static DECLARE_FAULT_ATTR(fail_iommufd);
+static bool mock_vdevice_unassign_fail;
 static struct dentry *dbgfs_root;
 static struct platform_device *selftest_iommu_dev;
 static const struct iommu_ops mock_ops;
@@ -607,7 +609,8 @@ static void mock_viommu_destroy(struct iommufd_viommu *viommu)
 	if (mock_viommu->mmap_offset)
 		iommufd_viommu_destroy_mmap(&mock_viommu->core,
 					    mock_viommu->mmap_offset);
-	free_pages((unsigned long)mock_viommu->page, 1);
+	if (mock_viommu->page)
+		free_pages((unsigned long)mock_viommu->page, 1);
 	mutex_destroy(&mock_viommu->queue_mutex);
 
 	/* iommufd core frees mock_viommu and viommu */
@@ -787,13 +790,76 @@ static const struct iommufd_viommu_ops mock_viommu_ops = {
 	.hw_queue_init_phys = mock_hw_queue_init_phys,
 };
 
+static unsigned int mock_vdevice_assign_fail;
+
+static int mock_vdevice_init(struct iommufd_vdevice *vdev)
+{
+	struct mock_dev *mdev = to_mock_dev(vdev->idev->dev);
+	struct iommu_attach_handle *handle;
+
+	handle = iommu_attach_handle_get(mdev->dev.iommu_group,
+					 IOMMU_NO_PASID, 0);
+	if (IS_ERR(handle))
+		return PTR_ERR(handle);
+	if (handle->domain != &mock_blocking_domain)
+		return -EINVAL;
+
+	if (mock_vdevice_assign_fail)
+		return -EIO;
+	return 0;
+}
+
+static int mock_vdevice_unassign(struct iommufd_vdevice *vdev)
+{
+	return mock_vdevice_unassign_fail ? -EIO : 0;
+}
+
+static const struct iommufd_viommu_ops mock_hypervisor_viommu_ops = {
+	.flags = IOMMUFD_VIOMMU_NO_HWPT,
+	.get_viommu_size = mock_get_viommu_size,
+	.viommu_init = mock_viommu_init,
+	.destroy = mock_viommu_destroy,
+	.vdevice_init = mock_vdevice_init,
+	.vdevice_unassign = mock_vdevice_unassign,
+};
+
 static const struct iommufd_viommu_ops *
 mock_get_viommu_ops(struct device *dev,
 		enum iommu_viommu_type viommu_type)
 {
-	if (viommu_type != IOMMU_VIOMMU_TYPE_SELFTEST)
-		return NULL;
-	return &mock_viommu_ops;
+	if (viommu_type == IOMMU_VIOMMU_TYPE_SELFTEST)
+		return &mock_viommu_ops;
+	return NULL;
+}
+
+const struct iommufd_viommu_ops *
+iommufd_selftest_get_viommu_ops(struct file *vm_file, struct device *dev,
+				enum iommu_viommu_type type)
+{
+	const struct iommufd_viommu_ops *ops;
+	typeof(mshv_iommufd_get_viommu_ops) *get_ops;
+	struct iommufd_ctx *ictx;
+
+	if (!iommufd_selftest_is_mock_dev(dev))
+		return ERR_PTR(-EBADFD);
+	ictx = iommufd_ctx_from_file(vm_file);
+	if (!IS_ERR(ictx)) {
+		iommufd_ctx_put(ictx);
+		goto found;
+	}
+
+	get_ops = symbol_get(mshv_iommufd_get_viommu_ops);
+	if (!get_ops)
+		return ERR_PTR(-EBADFD);
+	ops = get_ops(vm_file, dev, type);
+	symbol_put(mshv_iommufd_get_viommu_ops);
+	if (IS_ERR(ops) && PTR_ERR(ops) == -EBADFD)
+		return ops;
+
+found:
+	if (type != IOMMU_VIOMMU_TYPE_HYPERVISOR)
+		return ERR_PTR(-EOPNOTSUPP);
+	return &mock_hypervisor_viommu_ops;
 }
 
 static int mock_viommu_init(struct iommufd_viommu *viommu,
@@ -803,10 +869,13 @@ static int mock_viommu_init(struct iommufd_viommu *viommu,
 	struct mock_iommu_device *mock_iommu = container_of(
 		viommu->iommu_dev, struct mock_iommu_device, iommu_dev);
 	struct mock_viommu *mock_viommu = to_mock_viommu(viommu);
-	struct iommu_viommu_selftest data;
+	struct iommu_viommu_selftest data = {};
 	int rc;
 
-	if (user_data) {
+	if (viommu->type == IOMMU_VIOMMU_TYPE_HYPERVISOR) {
+		if (!viommu->provider_file)
+			return -EBADFD;
+	} else if (user_data) {
 		rc = iommu_copy_struct_from_user(
 			&data, user_data, IOMMU_VIOMMU_TYPE_SELFTEST, out_data);
 		if (rc)
@@ -838,7 +907,8 @@ static int mock_viommu_init(struct iommufd_viommu *viommu,
 
 	refcount_inc(&mock_iommu->users);
 	mutex_init(&mock_viommu->queue_mutex);
-	mock_viommu->s2_parent = to_mock_domain(parent_domain);
+	if (parent_domain)
+		mock_viommu->s2_parent = to_mock_domain(parent_domain);
 
 	return 0;
 
@@ -1163,6 +1233,29 @@ static int iommufd_test_mock_domain_replace(struct iommufd_ucmd *ucmd,
 	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
 
 out_sobj:
+	iommufd_put_object(ucmd->ictx, &sobj->obj);
+	return rc;
+}
+
+static int iommufd_test_mock_domain_attach(struct iommufd_ucmd *ucmd,
+					   unsigned int device_id, u32 pt_id,
+					   struct iommu_test_cmd *cmd)
+{
+	struct selftest_obj *sobj;
+	int rc;
+
+	sobj = iommufd_test_get_selftest_obj(ucmd->ictx, device_id);
+	if (IS_ERR(sobj))
+		return PTR_ERR(sobj);
+
+	down_write(&sobj->idev.mock_dev->iopf_rwsem);
+	rc = iommufd_device_attach(sobj->idev.idev, IOMMU_NO_PASID, &pt_id);
+	up_write(&sobj->idev.mock_dev->iopf_rwsem);
+	if (!rc) {
+		cmd->mock_domain_replace.pt_id = pt_id;
+		rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+	}
+
 	iommufd_put_object(ucmd->ictx, &sobj->obj);
 	return rc;
 }
@@ -2116,6 +2209,9 @@ int iommufd_test(struct iommufd_ucmd *ucmd)
 	case IOMMU_TEST_OP_MOCK_DOMAIN_REPLACE:
 		return iommufd_test_mock_domain_replace(
 			ucmd, cmd->id, cmd->mock_domain_replace.pt_id, cmd);
+	case IOMMU_TEST_OP_MOCK_DOMAIN_ATTACH:
+		return iommufd_test_mock_domain_attach(ucmd, cmd->id,
+				cmd->mock_domain_replace.pt_id, cmd);
 	case IOMMU_TEST_OP_MD_CHECK_MAP:
 		return iommufd_test_md_check_pa(
 			ucmd, cmd->id, cmd->check_map.iova,
@@ -2186,6 +2282,12 @@ int iommufd_test(struct iommufd_ucmd *ucmd)
 		return iommufd_test_dmabuf_revoke(ucmd,
 						  cmd->dmabuf_revoke.dmabuf_fd,
 						  cmd->dmabuf_revoke.revoked);
+	case IOMMU_TEST_OP_VDEVICE_ASSIGN_FAIL:
+		mock_vdevice_assign_fail = cmd->id;
+		return 0;
+	case IOMMU_TEST_OP_VDEVICE_UNASSIGN_FAIL:
+		mock_vdevice_unassign_fail = cmd->id;
+		return 0;
 	default:
 		return -EOPNOTSUPP;
 	}

@@ -10,6 +10,7 @@
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/iommu.h>
+#include <linux/list.h>
 #include <linux/refcount.h>
 #include <linux/types.h>
 #include <linux/xarray.h>
@@ -25,6 +26,7 @@ struct iommufd_ctx;
 struct iommufd_device;
 struct iommufd_viommu_ops;
 struct tsm_dev;
+struct module;
 struct page;
 
 enum iommufd_object_type {
@@ -108,6 +110,9 @@ struct iommufd_viommu {
 	struct iommufd_hwpt_paging *hwpt;
 	struct file *kvm_file;
 	struct tsm_dev *tsm_dev;
+	/* VM file selected by a file-backed hypervisor provider. */
+	struct file *provider_file;
+	struct iommufd_viommu_file_provider *file_provider;
 
 	const struct iommufd_viommu_ops *ops;
 
@@ -131,6 +136,13 @@ struct iommufd_vdevice {
 
 	/* Supported vDEVICE operations; set by vdevice_init(). */
 	u64 supported_ops;
+
+	enum {
+		IOMMUFD_VDEVICE_NEW,
+		IOMMUFD_VDEVICE_HOST_BLOCKED,
+		IOMMUFD_VDEVICE_EXTERNALLY_ASSIGNED,
+		IOMMUFD_VDEVICE_RECLAIMED,
+	} state;
 
 	/* Clean up all driver-specific parts of an iommufd_vdevice */
 	void (*destroy)(struct iommufd_vdevice *vdev);
@@ -219,12 +231,40 @@ struct iommufd_viommu_ops {
 				struct iommu_user_data_array *array);
 	const size_t vdevice_size;
 	int (*vdevice_init)(struct iommufd_vdevice *vdev);
+	int (*vdevice_unassign)(struct iommufd_vdevice *vdev);
 	size_t (*get_hw_queue_size)(struct iommufd_viommu *viommu,
 				    enum iommu_hw_queue_type queue_type);
 	/* AMD's HW will add hw_queue_init simply using @hw_queue->base_addr */
 	int (*hw_queue_init_phys)(struct iommufd_hw_queue *hw_queue, u32 index,
 				  phys_addr_t base_addr_pa);
 };
+
+/**
+ * struct iommufd_viommu_file_provider - VM file vIOMMU provider
+ * @node: Internal registration linkage
+ * @owner: Module that owns the provider, or NULL for built-in code
+ * @get_ops: Return ops for a supported VM file/device/type combination
+ *
+ * @get_ops should return -EBADFD when @vm_file is not owned by the provider,
+ * -EOPNOTSUPP when the combination is unsupported, or another error to stop
+ * provider lookup.
+ */
+struct iommufd_viommu_file_provider {
+	struct list_head node;
+	struct module *owner;
+	const struct iommufd_viommu_ops *(*get_ops)(
+		struct file *vm_file, struct device *dev,
+		enum iommu_viommu_type type);
+};
+
+int iommufd_viommu_file_provider_register(
+	struct iommufd_viommu_file_provider *provider);
+void iommufd_viommu_file_provider_unregister(
+	struct iommufd_viommu_file_provider *provider);
+const struct iommufd_viommu_ops *
+iommufd_viommu_file_provider_get_ops(
+	struct file *vm_file, struct device *dev, enum iommu_viommu_type type,
+	struct iommufd_viommu_file_provider **provider);
 
 #if IS_ENABLED(CONFIG_IOMMUFD)
 struct iommufd_ctx *iommufd_ctx_from_file(struct file *file);
@@ -300,6 +340,7 @@ struct device *iommufd_viommu_find_dev(struct iommufd_viommu *viommu,
 				       unsigned long vdev_id);
 int iommufd_viommu_get_vdev_id(struct iommufd_viommu *viommu,
 			       struct device *dev, unsigned long *vdev_id);
+struct device *iommufd_vdevice_get_device(struct iommufd_vdevice *vdev);
 int iommufd_viommu_report_event(struct iommufd_viommu *viommu,
 				enum iommu_veventq_type type, void *event_data,
 				size_t data_len);

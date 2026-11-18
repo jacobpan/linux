@@ -25,6 +25,7 @@
 struct iommufd_object_ops {
 	size_t file_offset;
 	void (*pre_destroy)(struct iommufd_object *obj);
+	int (*prepare_destroy)(struct iommufd_object *obj, bool force);
 	void (*destroy)(struct iommufd_object *obj);
 	void (*abort)(struct iommufd_object *obj);
 };
@@ -275,7 +276,18 @@ int iommufd_object_remove(struct iommufd_ctx *ictx,
 		goto err_xa;
 	}
 
-	xas_store(&xas, (flags & REMOVE_OBJ_TOMBSTONE) ? XA_ZERO_ENTRY : NULL);
+	xas_store(&xas, XA_ZERO_ENTRY);
+	xa_unlock(&ictx->objects);
+
+	if (iommufd_object_ops[obj->type].prepare_destroy) {
+		ret = iommufd_object_ops[obj->type].prepare_destroy(obj, false);
+		if (ret)
+			goto err_restore;
+	}
+
+	xa_lock(&ictx->objects);
+	if (!(flags & REMOVE_OBJ_TOMBSTONE))
+		xas_store(&xas, NULL);
 	if (ictx->vfio_ioas == container_of(obj, struct iommufd_ioas, obj))
 		ictx->vfio_ioas = NULL;
 	xa_unlock(&ictx->objects);
@@ -293,6 +305,15 @@ int iommufd_object_remove(struct iommufd_ctx *ictx,
 	iommufd_object_ops[obj->type].destroy(obj);
 	kfree(obj);
 	return 0;
+
+err_restore:
+	xa_lock(&ictx->objects);
+	refcount_set(&obj->users, 1);
+	WARN_ON(xas_store(&xas, obj) != XA_ZERO_ENTRY);
+	if (zerod_wait_cnt)
+		refcount_set(&obj->wait_cnt, 1);
+	xa_unlock(&ictx->objects);
+	return ret;
 
 err_xa:
 	if (zerod_wait_cnt) {
@@ -372,10 +393,19 @@ static int iommufd_fops_release(struct inode *inode, struct file *filp)
 		 * done.
 		 */
 		xa_for_each(&ictx->objects, index, obj) {
+			int ret;
+
 			empty = false;
 			if (!refcount_dec_if_one(&obj->users))
 				continue;
 
+			if (iommufd_object_ops[obj->type].prepare_destroy) {
+				ret = iommufd_object_ops[obj->type]
+					      .prepare_destroy(obj, true);
+				if (ret)
+					pr_err("Forced iommufd object destroy failed: %d\n",
+					       ret);
+			}
 			destroyed++;
 			xa_erase(&ictx->objects, index);
 			iommufd_object_ops[obj->type].destroy(obj);
@@ -743,6 +773,7 @@ static const struct iommufd_object_ops iommufd_object_ops[] = {
 		.destroy = iommufd_ioas_destroy,
 	},
 	[IOMMUFD_OBJ_VDEVICE] = {
+		.prepare_destroy = iommufd_vdevice_prepare_destroy,
 		.destroy = iommufd_vdevice_destroy,
 		.abort = iommufd_vdevice_abort,
 	},

@@ -4,9 +4,19 @@
 #include <linux/bits.h>
 #include <linux/file.h>
 #include <linux/cleanup.h>
+#include <linux/module.h>
 #include <linux/tsm.h>
 
 #include "iommufd_private.h"
+
+static const struct iommufd_viommu_ops *
+iommufd_viommu_get_file_ops(struct file *vm_file, struct device *dev,
+			    enum iommu_viommu_type type,
+			    struct iommufd_viommu_file_provider **provider)
+{
+	return iommufd_viommu_file_provider_get_ops(vm_file, dev, type,
+						    provider);
+}
 
 void iommufd_viommu_destroy(struct iommufd_object *obj)
 {
@@ -21,6 +31,10 @@ void iommufd_viommu_destroy(struct iommufd_object *obj)
 		refcount_dec(&viommu->hwpt->common.obj.users);
 	if (viommu->kvm_file)
 		fput(viommu->kvm_file);
+	if (viommu->provider_file)
+		fput(viommu->provider_file);
+	if (viommu->file_provider)
+		module_put(viommu->file_provider->owner);
 	xa_destroy(&viommu->vdevs);
 }
 
@@ -33,6 +47,9 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 		.len = cmd->data_len,
 	};
 	struct iommufd_hwpt_paging *hwpt_paging = NULL;
+	struct iommu_viommu_hypervisor hypervisor = {};
+	struct iommufd_viommu_file_provider *file_provider = NULL;
+	struct file *provider_file = NULL;
 	struct tsm_dev *tsm_dev = NULL;
 	struct iommufd_viommu *viommu;
 	struct iommufd_device *idev;
@@ -54,7 +71,8 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 		tsm_dev = NULL;
 		goto out_put_idev;
 	}
-	ops = tsm_dev ? tsm_viommu_get_ops(tsm_dev, idev->dev, cmd->type) : NULL;
+	ops = tsm_dev ? tsm_viommu_get_ops(tsm_dev, idev->dev, cmd->type) :
+			NULL;
 	if (IS_ERR(ops)) {
 		rc = PTR_ERR(ops);
 		goto out_put_idev;
@@ -69,6 +87,28 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 			rc = -EOPNOTSUPP;
 			goto out_put_idev;
 		}
+	}
+	if (!ops && cmd->type == IOMMU_VIOMMU_TYPE_HYPERVISOR) {
+		rc = iommu_copy_struct_from_user(&hypervisor, &user_data,
+						 cmd->type, vm_fd);
+		if (rc)
+			goto out_put_idev;
+		if (hypervisor.flags || hypervisor.__reserved) {
+			rc = -EOPNOTSUPP;
+			goto out_put_idev;
+		}
+		provider_file = fget(hypervisor.vm_fd);
+		if (!provider_file) {
+			rc = -EBADF;
+			goto out_put_idev;
+		}
+		ops = iommufd_viommu_get_file_ops(provider_file, idev->dev,
+						  cmd->type, &file_provider);
+		if (IS_ERR(ops)) {
+			rc = PTR_ERR(ops);
+			goto out_put_idev;
+		}
+	} else if (!ops) {
 		if (!iommu_dev->ops->get_viommu_ops) {
 			rc = -EOPNOTSUPP;
 			goto out_put_idev;
@@ -126,6 +166,10 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 	viommu->ictx = ucmd->ictx;
 	viommu->tsm_dev = tsm_dev;
 	tsm_dev = NULL;
+	viommu->provider_file = provider_file;
+	provider_file = NULL;
+	viommu->file_provider = file_provider;
+	file_provider = NULL;
 	viommu->hwpt = hwpt_paging;
 	if (viommu->hwpt)
 		refcount_inc(&viommu->hwpt->common.obj.users);
@@ -152,6 +196,10 @@ out_put_hwpt:
 	if (hwpt_paging)
 		iommufd_put_object(ucmd->ictx, &hwpt_paging->common.obj);
 out_put_idev:
+	if (provider_file)
+		fput(provider_file);
+	if (file_provider)
+		module_put(file_provider->owner);
 	if (tsm_dev)
 		tsm_put_device(tsm_dev);
 	iommufd_put_object(ucmd->ictx, &idev->obj);
@@ -190,15 +238,60 @@ out_put_object:
 	return ret;
 }
 
+static int iommufd_vdevice_unassign(struct iommufd_vdevice *vdev)
+{
+	int rc;
+
+	if (vdev->state != IOMMUFD_VDEVICE_EXTERNALLY_ASSIGNED)
+		return 0;
+	if (!vdev->viommu->ops->vdevice_unassign)
+		return -EOPNOTSUPP;
+
+	rc = vdev->viommu->ops->vdevice_unassign(vdev);
+	if (!rc)
+		vdev->state = IOMMUFD_VDEVICE_RECLAIMED;
+	return rc;
+}
+
+int iommufd_vdevice_prepare_destroy(struct iommufd_object *obj, bool force)
+{
+	struct iommufd_vdevice *vdev =
+		container_of(obj, struct iommufd_vdevice, obj);
+	struct iommufd_device *idev = vdev->idev;
+	int rc;
+
+	mutex_lock(&idev->igroup->lock);
+	rc = iommufd_vdevice_unassign(vdev);
+	if (rc && force) {
+		dev_err(idev->dev, "Failed to reclaim vDEVICE: %d\n", rc);
+		idev->igroup->external_reclaim_failed = true;
+	}
+	if (!rc && idev->igroup->external_vdevice == vdev)
+		idev->igroup->external_vdevice = NULL;
+	mutex_unlock(&idev->igroup->lock);
+	return rc;
+}
+
 void iommufd_vdevice_abort(struct iommufd_object *obj)
 {
 	struct iommufd_vdevice *vdev =
 		container_of(obj, struct iommufd_vdevice, obj);
 	struct iommufd_viommu *viommu = vdev->viommu;
 	struct iommufd_device *idev = vdev->idev;
+	int rc;
 
 	lockdep_assert_held(&idev->igroup->lock);
 
+	rc = iommufd_vdevice_unassign(vdev);
+	if (rc) {
+		dev_err(idev->dev, "Failed to reclaim aborted vDEVICE\n");
+		idev->igroup->external_vdevice = NULL;
+		idev->igroup->external_reclaim_failed = true;
+	} else if (vdev->state == IOMMUFD_VDEVICE_RECLAIMED &&
+		   idev->igroup->external_vdevice == vdev) {
+		idev->igroup->external_vdevice = NULL;
+		idev->igroup->external_reclaim_failed = false;
+	}
 	if (vdev->destroy)
 		vdev->destroy(vdev);
 	/* xa_cmpxchg is okay to fail if alloc failed xa_cmpxchg previously */
@@ -224,10 +317,12 @@ int iommufd_vdevice_alloc_ioctl(struct iommufd_ucmd *ucmd)
 {
 	struct iommu_vdevice_alloc *cmd = ucmd->cmd;
 	struct iommufd_vdevice *vdev;
+	struct iommufd_external_txn txn;
 	size_t vdev_size = sizeof(*vdev);
 	struct iommufd_viommu *viommu;
 	struct iommu_device *iommu_dev;
 	struct iommufd_device *idev;
+	bool retain_idev_ref = false;
 	u64 virt_id = cmd->virt_id;
 	int rc = 0;
 
@@ -292,6 +387,7 @@ int iommufd_vdevice_alloc_ioctl(struct iommufd_ucmd *ucmd)
 
 	vdev->virt_id = virt_id;
 	vdev->viommu = viommu;
+	vdev->state = IOMMUFD_VDEVICE_NEW;
 	refcount_inc(&viommu->obj.users);
 	/*
 	 * A wait_cnt reference is held on the idev so long as we have the
@@ -320,19 +416,74 @@ int iommufd_vdevice_alloc_ioctl(struct iommufd_ucmd *ucmd)
 	}
 
 	if (viommu->ops && viommu->ops->vdevice_init) {
+		if (viommu->type == IOMMU_VIOMMU_TYPE_HYPERVISOR) {
+			mutex_unlock(&idev->igroup->lock);
+			rc = iommufd_device_prepare_external(idev, &txn);
+			mutex_lock(&idev->igroup->lock);
+			if (rc)
+				goto out_abort;
+			vdev->state = IOMMUFD_VDEVICE_HOST_BLOCKED;
+		}
 		rc = viommu->ops->vdevice_init(vdev);
 		if (rc) {
+			int abort_rc;
+
 			xa_release(&viommu->vdevs, virt_id);
+			if (viommu->type == IOMMU_VIOMMU_TYPE_HYPERVISOR) {
+				mutex_unlock(&idev->igroup->lock);
+				abort_rc =
+					iommufd_device_abort_external(idev, &txn);
+				if (abort_rc) {
+					dev_err(idev->dev,
+						"Failed to restore host HWPT: %d\n",
+						abort_rc);
+					iommufd_device_quarantine_external(idev,
+									   &txn);
+				}
+				mutex_lock(&idev->igroup->lock);
+			}
 			goto out_abort;
 		}
 	}
+	if (viommu->type == IOMMU_VIOMMU_TYPE_HYPERVISOR)
+		vdev->state = IOMMUFD_VDEVICE_EXTERNALLY_ASSIGNED;
 
 	xa_store(&viommu->vdevs, virt_id, vdev, GFP_KERNEL);
 
 	cmd->out_vdevice_id = vdev->obj.id;
 	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
-	if (rc)
+	if (rc) {
+		if (viommu->type == IOMMU_VIOMMU_TYPE_HYPERVISOR) {
+			int unassign_rc = iommufd_vdevice_unassign(vdev);
+
+			if (!unassign_rc) {
+				mutex_unlock(&idev->igroup->lock);
+				unassign_rc =
+					iommufd_device_abort_external(idev, &txn);
+				if (unassign_rc)
+					iommufd_device_quarantine_external(idev,
+									   &txn);
+				mutex_lock(&idev->igroup->lock);
+			} else {
+				mutex_unlock(&idev->igroup->lock);
+				iommufd_device_commit_external(idev, vdev, &txn);
+				mutex_lock(&idev->igroup->lock);
+				iommufd_object_finalize(ucmd->ictx, &vdev->obj);
+				retain_idev_ref = true;
+				goto out_unlock_igroup;
+			}
+			if (unassign_rc)
+				dev_err(idev->dev,
+					"Failed to abort vDEVICE allocation: %d\n",
+					unassign_rc);
+		}
 		goto out_abort;
+	}
+	if (viommu->type == IOMMU_VIOMMU_TYPE_HYPERVISOR) {
+		mutex_unlock(&idev->igroup->lock);
+		iommufd_device_commit_external(idev, vdev, &txn);
+		mutex_lock(&idev->igroup->lock);
+	}
 	iommufd_object_finalize(ucmd->ictx, &vdev->obj);
 	goto out_unlock_igroup;
 
@@ -341,7 +492,7 @@ out_abort:
 out_unlock_igroup:
 	mutex_unlock(&idev->igroup->lock);
 out_put_idev:
-	if (rc)
+	if (rc && !retain_idev_ref)
 		iommufd_put_object(ucmd->ictx, &idev->obj);
 out_put_viommu:
 	iommufd_put_object(ucmd->ictx, &viommu->obj);
