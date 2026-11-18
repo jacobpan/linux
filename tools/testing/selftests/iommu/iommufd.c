@@ -3,10 +3,11 @@
 #include <asm/unistd.h>
 #include <stdlib.h>
 #include <sys/capability.h>
-#include <sys/mman.h>
 #include <sys/eventfd.h>
+#include <sys/mman.h>
 
 #define __EXPORTED_HEADERS__
+#include <linux/mshv.h>
 #include <linux/vfio.h>
 
 #include "iommufd_utils.h"
@@ -2880,10 +2881,99 @@ TEST_F(iommufd_viommu, viommu_auto_destroy)
 {
 }
 
+TEST_F(iommufd_viommu, viommu_hypervisor_file_provider)
+{
+	struct iommu_viommu_hypervisor hypervisor = {
+		.vm_fd = self->fd,
+	};
+	uint32_t viommu_id;
+
+	if (!self->device_id)
+		SKIP(return, "Skipping test for variant no_viommu");
+
+	ASSERT_EQ(0,
+		  _test_cmd_viommu_alloc(self->fd, self->device_id, 0, 0,
+					 IOMMU_VIOMMU_TYPE_HYPERVISOR,
+					 &hypervisor, sizeof(hypervisor),
+					 &viommu_id));
+	test_ioctl_destroy(viommu_id);
+
+	hypervisor.vm_fd = -1;
+	EXPECT_ERRNO(EBADF,
+		     _test_cmd_viommu_alloc(self->fd, self->device_id, 0, 0,
+					    IOMMU_VIOMMU_TYPE_HYPERVISOR,
+					    &hypervisor, sizeof(hypervisor),
+					    &viommu_id));
+}
+
+TEST_F(iommufd_viommu, vdevice_destroy_reclaim_retry)
+{
+	struct iommu_viommu_hypervisor hypervisor = {
+		.vm_fd = self->fd,
+	};
+	uint32_t viommu_id;
+	uint32_t vdevice_id;
+
+	if (!self->device_id)
+		SKIP(return, "Skipping test for variant no_viommu");
+
+	ASSERT_EQ(0,
+		  _test_cmd_viommu_alloc(self->fd, self->device_id, 0, 0,
+					 IOMMU_VIOMMU_TYPE_HYPERVISOR,
+					 &hypervisor, sizeof(hypervisor),
+					 &viommu_id));
+	test_cmd_vdevice_alloc(viommu_id, self->device_id, 1, &vdevice_id);
+
+	test_cmd_vdevice_unassign_fail(true);
+	EXPECT_ERRNO(EIO, _test_ioctl_destroy(self->fd, vdevice_id));
+	test_cmd_vdevice_unassign_fail(false);
+	test_ioctl_destroy(vdevice_id);
+	test_ioctl_destroy(viommu_id);
+}
+
+TEST_F(iommufd_viommu, vdevice_external_assignment)
+{
+	struct iommu_viommu_hypervisor hypervisor = {
+		.vm_fd = self->fd,
+	};
+	uint32_t replacement_hwpt_id;
+	uint32_t viommu_id;
+	uint32_t vdevice_id;
+
+	if (!self->device_id)
+		SKIP(return, "Skipping test for variant no_viommu");
+
+	ASSERT_EQ(0,
+		  _test_cmd_viommu_alloc(self->fd, self->device_id, 0, 0,
+					 IOMMU_VIOMMU_TYPE_HYPERVISOR,
+					 &hypervisor, sizeof(hypervisor),
+					 &viommu_id));
+	test_cmd_hwpt_alloc(self->device_id, self->ioas_id, 0,
+			    &replacement_hwpt_id);
+
+	test_cmd_vdevice_assign_fail(true);
+	EXPECT_ERRNO(EIO,
+		     _test_cmd_vdevice_alloc(self->fd, viommu_id,
+					     self->device_id, 1, &vdevice_id));
+	test_cmd_vdevice_assign_fail(false);
+	test_cmd_mock_domain_replace(self->stdev_id, replacement_hwpt_id);
+
+	test_cmd_vdevice_alloc(viommu_id, self->device_id, 1, &vdevice_id);
+	test_err_mock_domain_replace(EBUSY, self->stdev_id,
+				     replacement_hwpt_id);
+	test_ioctl_destroy(vdevice_id);
+	test_cmd_mock_domain_attach(self->stdev_id, replacement_hwpt_id);
+	test_ioctl_destroy(viommu_id);
+}
+
 TEST_F(iommufd_viommu, viommu_negative_tests)
 {
+	struct iommu_viommu_hypervisor hypervisor = {
+		.vm_fd = self->fd,
+	};
 	uint32_t device_id = self->device_id;
 	uint32_t ioas_id = self->ioas_id;
+	uint32_t hypervisor_viommu_id;
 	uint32_t hwpt_id;
 
 	if (self->device_id) {
@@ -2898,6 +2988,31 @@ TEST_F(iommufd_viommu, viommu_negative_tests)
 				      IOMMU_VIOMMU_TYPE_SELFTEST, NULL, 0,
 				      NULL);
 		test_ioctl_destroy(hwpt_id);
+
+		/* Negative test -- hypervisor vIOMMU requires type data */
+		EXPECT_ERRNO(EINVAL,
+			     _test_cmd_viommu_alloc(self->fd, device_id,
+						    0, 0,
+						    IOMMU_VIOMMU_TYPE_HYPERVISOR,
+						    NULL, 0, NULL));
+
+		ASSERT_EQ(0,
+			  _test_cmd_viommu_alloc(self->fd, device_id, 0, 0,
+						 IOMMU_VIOMMU_TYPE_HYPERVISOR,
+						 &hypervisor,
+						 sizeof(hypervisor),
+						 &hypervisor_viommu_id));
+		test_err_hw_queue_alloc(EOPNOTSUPP, hypervisor_viommu_id,
+					IOMMU_HW_QUEUE_TYPE_SELFTEST, 0,
+					MOCK_APERTURE_START, PAGE_SIZE, NULL);
+		test_ioctl_destroy(hypervisor_viommu_id);
+
+		/* Negative test -- unsupported viommu flag */
+		EXPECT_ERRNO(EOPNOTSUPP,
+			     _test_cmd_viommu_alloc(self->fd, device_id,
+						    self->hwpt_id, 1U << 31,
+						    IOMMU_VIOMMU_TYPE_SELFTEST,
+						    NULL, 0, NULL));
 
 		/* Negative test -- unsupported viommu type */
 		test_err_viommu_alloc(EOPNOTSUPP, device_id, self->hwpt_id,
@@ -2985,6 +3100,93 @@ TEST_F(iommufd_viommu, viommu_alloc_with_data)
 	/* The owner of the mmap region should be blocked */
 	EXPECT_ERRNO(EBUSY, _test_ioctl_destroy(self->fd, self->viommu_id));
 	munmap(test, data.out_mmap_length);
+}
+
+TEST_F(iommufd_viommu, viommu_alloc_mshv)
+{
+	struct iommu_viommu_hypervisor data = {};
+	struct iommu_vdevice_op req = {
+		.size = sizeof(req),
+	};
+	struct mshv_create_partition args = {};
+	uint32_t viommu_id;
+	uint32_t vdev_id;
+	int mshv_fd;
+	int vm_fd;
+
+	if (!self->device_id)
+		SKIP(return, "Skipping test for variant no_viommu");
+
+	vm_fd = dup(self->fd);
+	ASSERT_NE(-1, vm_fd);
+	close(vm_fd);
+	data.vm_fd = vm_fd;
+	EXPECT_ERRNO(EBADF,
+		     _test_cmd_viommu_alloc(self->fd, self->device_id, 0, 0,
+					    IOMMU_VIOMMU_TYPE_HYPERVISOR,
+					    &data, sizeof(data), &viommu_id));
+
+	mshv_fd = open("/dev/mshv", O_RDWR | O_CLOEXEC);
+	if (mshv_fd < 0) {
+		if (errno == ENOENT || errno == ENODEV)
+			SKIP(return, "Skipping test because /dev/mshv is unavailable");
+		ASSERT_NE(-1, mshv_fd);
+	}
+
+	vm_fd = ioctl(mshv_fd, MSHV_CREATE_PARTITION, &args);
+	ASSERT_NE(-1, vm_fd);
+	data.vm_fd = vm_fd;
+
+	ASSERT_EQ(0, _test_cmd_viommu_alloc(self->fd, self->device_id, 0, 0,
+					    IOMMU_VIOMMU_TYPE_HYPERVISOR, &data,
+					    sizeof(data), &viommu_id));
+
+	test_cmd_vdevice_alloc(viommu_id, self->device_id, 0x99, &vdev_id);
+	req.vdevice_id = vdev_id;
+	EXPECT_ERRNO(EOPNOTSUPP,
+		     ioctl(self->fd, IOMMU_VDEVICE_OP, &req));
+	EXPECT_ERRNO(EBUSY, _test_ioctl_destroy(self->fd, viommu_id));
+	test_ioctl_destroy(vdev_id);
+	test_ioctl_destroy(viommu_id);
+	close(vm_fd);
+	close(mshv_fd);
+}
+
+TEST_F(iommufd_viommu, viommu_survives_mshv_vm_fd_close)
+{
+	struct iommu_viommu_hypervisor data = {};
+	struct mshv_create_partition args = {};
+	uint32_t viommu_id;
+	uint32_t vdev_id;
+	int mshv_fd;
+	int vm_fd;
+
+	if (!self->device_id)
+		SKIP(return, "Skipping test for variant no_viommu");
+
+	mshv_fd = open("/dev/mshv", O_RDWR | O_CLOEXEC);
+	if (mshv_fd < 0) {
+		if (errno == ENOENT || errno == ENODEV)
+			SKIP(return, "Skipping test because /dev/mshv is unavailable");
+		ASSERT_NE(-1, mshv_fd);
+	}
+
+	vm_fd = ioctl(mshv_fd, MSHV_CREATE_PARTITION, &args);
+	ASSERT_NE(-1, vm_fd);
+	data.vm_fd = vm_fd;
+
+	ASSERT_EQ(0, _test_cmd_viommu_alloc(self->fd, self->device_id, 0, 0,
+					    IOMMU_VIOMMU_TYPE_HYPERVISOR, &data,
+					    sizeof(data), &viommu_id));
+	test_cmd_vdevice_alloc(viommu_id, self->device_id, 0x99, &vdev_id);
+
+	close(vm_fd);
+	vm_fd = -1;
+
+	EXPECT_ERRNO(EBUSY, _test_ioctl_destroy(self->fd, viommu_id));
+	test_ioctl_destroy(vdev_id);
+	test_ioctl_destroy(viommu_id);
+	close(mshv_fd);
 }
 
 TEST_F(iommufd_viommu, vdevice_alloc)

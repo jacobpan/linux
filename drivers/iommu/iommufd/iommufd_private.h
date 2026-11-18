@@ -762,9 +762,6 @@ bool iommufd_should_fail(void);
 int __init iommufd_test_init(void);
 void iommufd_test_exit(void);
 bool iommufd_selftest_is_mock_dev(struct device *dev);
-const struct iommufd_viommu_ops *
-iommufd_selftest_get_viommu_ops(struct file *vm_file, struct device *dev,
-				enum iommu_viommu_type type);
 int iommufd_test_dma_buf_iommufd_map(struct dma_buf_attachment *attachment,
 				     struct phys_vec *phys);
 #else

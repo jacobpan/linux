@@ -832,35 +832,21 @@ mock_get_viommu_ops(struct device *dev,
 	return NULL;
 }
 
-const struct iommufd_viommu_ops *
+static const struct iommufd_viommu_ops *
 iommufd_selftest_get_viommu_ops(struct file *vm_file, struct device *dev,
 				enum iommu_viommu_type type)
 {
-	const struct iommufd_viommu_ops *ops;
-	typeof(mshv_iommufd_get_viommu_ops) *get_ops;
-	struct iommufd_ctx *ictx;
-
 	if (!iommufd_selftest_is_mock_dev(dev))
 		return ERR_PTR(-EBADFD);
-	ictx = iommufd_ctx_from_file(vm_file);
-	if (!IS_ERR(ictx)) {
-		iommufd_ctx_put(ictx);
-		goto found;
-	}
-
-	get_ops = symbol_get(mshv_iommufd_get_viommu_ops);
-	if (!get_ops)
-		return ERR_PTR(-EBADFD);
-	ops = get_ops(vm_file, dev, type);
-	symbol_put(mshv_iommufd_get_viommu_ops);
-	if (IS_ERR(ops) && PTR_ERR(ops) == -EBADFD)
-		return ops;
-
-found:
 	if (type != IOMMU_VIOMMU_TYPE_HYPERVISOR)
 		return ERR_PTR(-EOPNOTSUPP);
 	return &mock_hypervisor_viommu_ops;
 }
+
+static struct iommufd_viommu_file_provider mock_file_provider = {
+	.owner = THIS_MODULE,
+	.get_ops = iommufd_selftest_get_viommu_ops,
+};
 
 static int mock_viommu_init(struct iommufd_viommu *viommu,
 		struct device *dev, struct iommu_domain *parent_domain,
@@ -2305,6 +2291,10 @@ int __init iommufd_test_init(void)
 	};
 	int rc;
 
+	rc = iommufd_viommu_file_provider_register(&mock_file_provider);
+	if (rc)
+		return rc;
+
 	dbgfs_root =
 		fault_create_debugfs_attr("fail_iommufd", NULL, &fail_iommufd);
 
@@ -2346,6 +2336,7 @@ err_platform:
 	platform_device_unregister(selftest_iommu_dev);
 err_dbgfs:
 	debugfs_remove_recursive(dbgfs_root);
+	iommufd_viommu_file_provider_unregister(&mock_file_provider);
 	return rc;
 }
 
@@ -2367,6 +2358,8 @@ static void iommufd_test_wait_for_users(void)
 
 void iommufd_test_exit(void)
 {
+	iommufd_viommu_file_provider_unregister(&mock_file_provider);
+
 	if (mock_iommu_iopf_queue) {
 		iopf_queue_free(mock_iommu_iopf_queue);
 		mock_iommu_iopf_queue = NULL;

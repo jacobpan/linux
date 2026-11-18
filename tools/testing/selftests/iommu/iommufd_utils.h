@@ -187,6 +187,23 @@ static int _test_cmd_mock_domain_replace(int fd, __u32 stdev_id, __u32 pt_id,
 	EXPECT_ERRNO(_errno, _test_cmd_mock_domain_replace(self->fd, stdev_id, \
 							   pt_id, NULL))
 
+static int _test_cmd_mock_domain_attach(int fd, __u32 stdev_id, __u32 pt_id)
+{
+	struct iommu_test_cmd cmd = {
+		.size = sizeof(cmd),
+		.op = IOMMU_TEST_OP_MOCK_DOMAIN_ATTACH,
+		.id = stdev_id,
+		.mock_domain_replace = {
+			.pt_id = pt_id,
+		},
+	};
+
+	return ioctl(fd, IOMMU_TEST_CMD, &cmd);
+}
+
+#define test_cmd_mock_domain_attach(stdev_id, pt_id) \
+	ASSERT_EQ(0, _test_cmd_mock_domain_attach(self->fd, stdev_id, pt_id))
+
 static int _test_cmd_hwpt_alloc(int fd, __u32 device_id, __u32 pt_id, __u32 ft_id,
 				__u32 flags, __u32 *hwpt_id, __u32 data_type,
 				void *data, size_t data_len)
@@ -990,6 +1007,36 @@ static int _test_cmd_viommu_alloc(int fd, __u32 device_id, __u32 hwpt_id,
 		*viommu_id = cmd.out_viommu_id;
 	return 0;
 }
+
+static int _test_cmd_vdevice_unassign_fail(int fd, bool enable)
+{
+	struct iommu_test_cmd cmd = {
+		.size = sizeof(cmd),
+		.op = IOMMU_TEST_OP_VDEVICE_UNASSIGN_FAIL,
+		.id = enable,
+	};
+
+	return ioctl(fd, _IOMMU_TEST_CMD(IOMMU_TEST_OP_VDEVICE_UNASSIGN_FAIL),
+		     &cmd);
+}
+
+#define test_cmd_vdevice_unassign_fail(enable) \
+	ASSERT_EQ(0, _test_cmd_vdevice_unassign_fail(self->fd, enable))
+
+static int _test_cmd_vdevice_assign_fail(int fd, bool enable)
+{
+	struct iommu_test_cmd cmd = {
+		.size = sizeof(cmd),
+		.op = IOMMU_TEST_OP_VDEVICE_ASSIGN_FAIL,
+		.id = enable,
+	};
+
+	return ioctl(fd, _IOMMU_TEST_CMD(IOMMU_TEST_OP_VDEVICE_ASSIGN_FAIL),
+		     &cmd);
+}
+
+#define test_cmd_vdevice_assign_fail(enable) \
+	ASSERT_EQ(0, _test_cmd_vdevice_assign_fail(self->fd, enable))
 
 #define test_cmd_viommu_alloc(device_id, hwpt_id, type, data, data_len,      \
 			      viommu_id)                                     \
